@@ -20,7 +20,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.util.Log;
-
 import java.util.Arrays;
 import java.util.concurrent.CopyOnWriteArraySet;
 
@@ -94,24 +93,6 @@ import java.util.concurrent.CopyOnWriteArraySet;
   public void prepare(TrackRenderer... renderers) {
     Arrays.fill(trackFormats, null);
     internalPlayer.prepare(renderers);
-  }
-
-  @Deprecated
-  @Override
-  public boolean getRendererHasMedia(int rendererIndex) {
-    return getTrackCount(rendererIndex) > 0;
-  }
-
-  @Deprecated
-  @Override
-  public void setRendererEnabled(int rendererIndex, boolean enabled) {
-    setSelectedTrack(rendererIndex, enabled ? ExoPlayer.TRACK_DEFAULT : ExoPlayer.TRACK_DISABLED);
-  }
-
-  @Deprecated
-  @Override
-  public boolean getRendererEnabled(int rendererIndex) {
-    return getSelectedTrack(rendererIndex) >= 0;
   }
 
   @Override

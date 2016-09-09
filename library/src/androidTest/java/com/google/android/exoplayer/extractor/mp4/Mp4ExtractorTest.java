@@ -15,6 +15,7 @@
  */
 package com.google.android.exoplayer.extractor.mp4;
 
+import android.annotation.TargetApi;
 import com.google.android.exoplayer.C;
 import com.google.android.exoplayer.MediaFormat;
 import com.google.android.exoplayer.extractor.SeekMap;
@@ -23,14 +24,10 @@ import com.google.android.exoplayer.testutil.FakeTrackOutput;
 import com.google.android.exoplayer.testutil.TestUtil;
 import com.google.android.exoplayer.util.MimeTypes;
 import com.google.android.exoplayer.util.Util;
-
-import android.annotation.TargetApi;
-
-import junit.framework.TestCase;
-
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
+import junit.framework.TestCase;
 
 /**
  * Tests for {@link Mp4Extractor}.
@@ -39,47 +36,51 @@ import java.util.List;
 public final class Mp4ExtractorTest extends TestCase {
 
   /** String of hexadecimal bytes containing the video stsd payload from an AVC video. */
-  private static final byte[] VIDEO_STSD_PAYLOAD = getByteArray(
-      "00000000000000010000009961766331000000000000000100000000000000000000000000000000050002"
-      + "d00048000000480000000000000001000000000000000000000000000000000000000000000000000000"
-      + "00000000000018ffff0000002f617663430164001fffe100186764001facb402802dd808800000030080"
-      + "00001e078c195001000468ee3cb000000014627472740000e35c0042a61000216cb8");
-  private static final byte[] VIDEO_HDLR_PAYLOAD = getByteArray("000000000000000076696465");
-  private static final byte[] VIDEO_MDHD_PAYLOAD =
-      getByteArray("0000000000000000cf6c48890000001e00001c8a55c40000");
+  private static final byte[] VIDEO_STSD_PAYLOAD = Util.getBytesFromHexString(
+      "00000000000000010000009961766331000000000000000100000000000000000000000000000000050002d00048"
+      + "000000480000000000000001000000000000000000000000000000000000000000000000000000000000000000"
+      + "18ffff0000002f617663430164001fffe100186764001facb402802dd80880000003008000001e078c19500100"
+      + "0468ee3cb000000014627472740000e35c0042a61000216cb8");
+  private static final byte[] VIDEO_HDLR_PAYLOAD = Util.getBytesFromHexString(
+      "000000000000000076696465");
+  private static final byte[] VIDEO_MDHD_PAYLOAD = Util.getBytesFromHexString(
+      "0000000000000000cf6c48890000001e00001c8a55c40000");
   private static final int TIMESCALE = 30;
   private static final int VIDEO_WIDTH = 1280;
   private static final int VIDEO_HEIGHT = 720;
 
   /** String of hexadecimal bytes containing the video stsd payload for an mp4v track. */
-  private static final byte[] VIDEO_STSD_MP4V_PAYLOAD = getByteArray(
-      "0000000000000001000000A36D703476000000000000000100000000000000000000000000000000014000"
-      + "B40048000000480000000000000001000000000000000000000000000000000000000000000000000000"
-      + "00000000000018FFFF0000004D6573647300000000033F00000004372011001A400004CF280002F11805"
-      + "28000001B001000001B58913000001000000012000C48D8800F50A04169463000001B2476F6F676C6506"
-      + "0102");
+  private static final byte[] VIDEO_STSD_MP4V_PAYLOAD = Util.getBytesFromHexString(
+      "0000000000000001000000A36D703476000000000000000100000000000000000000000000000000014000B40048"
+      + "000000480000000000000001000000000000000000000000000000000000000000000000000000000000000000"
+      + "18FFFF0000004D6573647300000000033F00000004372011001A400004CF280002F1180528000001B001000001"
+      + "B58913000001000000012000C48D8800F50A04169463000001B2476F6F676C65060102");
   private static final int VIDEO_MP4V_WIDTH = 320;
   private static final int VIDEO_MP4V_HEIGHT = 180;
 
   /** String of hexadecimal bytes containing the audio stsd payload from an AAC track. */
-  private static final byte[] AUDIO_STSD_PAYLOAD = getByteArray(
-      "0000000000000001000000596d703461000000000000000100000000000000000001001000000000ac4400"
-      + "000000003565736473000000000327000000041f401500023e00024bc000023280051012080000000000"
-      + "000000000000000000060102");
-  private static final byte[] AUDIO_HDLR_PAYLOAD = getByteArray("0000000000000000736f756e");
-  private static final byte[] AUDIO_MDHD_PAYLOAD =
-      getByteArray("00000000cf6c4889cf6c488a0000ac4400a3e40055c40000");
+  private static final byte[] AUDIO_STSD_PAYLOAD = Util.getBytesFromHexString(
+      "0000000000000001000000596d703461000000000000000100000000000000000001001000000000ac4400000000"
+      + "003565736473000000000327000000041f401500023e00024bc000023280051012080000000000000000000000"
+      + "000000060102");
+  private static final byte[] AUDIO_HDLR_PAYLOAD = Util.getBytesFromHexString(
+      "0000000000000000736f756e");
+  private static final byte[] AUDIO_MDHD_PAYLOAD = Util.getBytesFromHexString(
+      "00000000cf6c4889cf6c488a0000ac4400a3e40055c40000");
+
+  /** String of hexadecimal bytes for an ftyp payload with major_brand mp41 and minor_version 0. **/
+  private static final byte[] FTYP_PAYLOAD = Util.getBytesFromHexString("6d70343100000000");
 
   /** String of hexadecimal bytes containing an mvhd payload from an AVC/AAC video. */
-  private static final byte[] MVHD_PAYLOAD = getByteArray(
-      "00000000cf6c4888cf6c48880000025800023ad40001000001000000000000000000000000010000000000"
-      + "000000000000000000000100000000000000000000000000004000000000000000000000000000000000"
-      + "000000000000000000000000000003");
+  private static final byte[] MVHD_PAYLOAD = Util.getBytesFromHexString(
+      "00000000cf6c4888cf6c48880000025800023ad40001000001000000000000000000000000010000000000000000"
+      + "000000000000000100000000000000000000000000004000000000000000000000000000000000000000000000"
+      + "000000000000000003");
 
   /** String of hexadecimal bytes containing a tkhd payload with an unknown duration. */
-  private static final byte[] TKHD_PAYLOAD = getByteArray(
-      "00000007D1F0C7BFD1F0C7BF0000000000000000FFFFFFFF00000000000000000000000000000000000100"
-      + "0000000000000000000000000000010000000000000000000000000000400000000780000004380000");
+  private static final byte[] TKHD_PAYLOAD = Util.getBytesFromHexString(
+      "00000007D1F0C7BFD1F0C7BF0000000000000000FFFFFFFF00000000000000000000000000000000000100000000"
+      + "0000000000000000000000010000000000000000000000000000400000000780000004380000");
 
   /** Video frame timestamps in time units. */
   private static final int[] SAMPLE_TIMESTAMPS = {0, 2, 3, 5, 6, 7};
@@ -88,7 +89,7 @@ public final class Mp4ExtractorTest extends TestCase {
   /** Indices of key-frames. */
   private static final boolean[] SAMPLE_IS_SYNC = {true, false, false, false, true, true};
   /** Indices of video frame chunk offsets. */
-  private static final int[] CHUNK_OFFSETS = {1200, 2120, 3120, 4120};
+  private static final int[] CHUNK_OFFSETS = {1208, 2128, 3128, 4128};
   /** Numbers of video frames in each chunk. */
   private static final int[] SAMPLES_IN_CHUNK = {2, 2, 1, 1};
   /** The mdat box must be large enough to avoid reading chunk sample data out of bounds. */
@@ -368,7 +369,7 @@ public final class Mp4ExtractorTest extends TestCase {
   /** Gets a valid MP4 file with audio/video tracks and synchronization data. */
   private static byte[] getTestMp4File(boolean mp4vFormat) {
     return Mp4Atom.serialize(
-        atom(Atom.TYPE_ftyp, EMPTY),
+        atom(Atom.TYPE_ftyp, FTYP_PAYLOAD),
         atom(Atom.TYPE_moov,
             atom(Atom.TYPE_mvhd, MVHD_PAYLOAD),
             atom(Atom.TYPE_trak,
@@ -400,13 +401,13 @@ public final class Mp4ExtractorTest extends TestCase {
                             atom(Atom.TYPE_stsc, getStsc()),
                             atom(Atom.TYPE_stsz, getStsz()),
                             atom(Atom.TYPE_stco, getStco())))))),
-        atom(Atom.TYPE_mdat, getMdat(mp4vFormat ? 1168 : 1158, !mp4vFormat)));
+        atom(Atom.TYPE_mdat, getMdat(mp4vFormat ? 1176 : 1166, !mp4vFormat)));
   }
 
   /** Gets a valid MP4 file with audio/video tracks and without a synchronization table. */
   private static byte[] getTestMp4FileWithoutSynchronizationData(boolean mp4vFormat) {
     return Mp4Atom.serialize(
-        atom(Atom.TYPE_ftyp, EMPTY),
+        atom(Atom.TYPE_ftyp, FTYP_PAYLOAD),
         atom(Atom.TYPE_moov,
             atom(Atom.TYPE_mvhd, MVHD_PAYLOAD),
             atom(Atom.TYPE_trak,
@@ -436,7 +437,7 @@ public final class Mp4ExtractorTest extends TestCase {
                             atom(Atom.TYPE_stsc, getStsc()),
                             atom(Atom.TYPE_stsz, getStsz()),
                             atom(Atom.TYPE_stco, getStco())))))),
-        atom(Atom.TYPE_mdat, getMdat(mp4vFormat ? 1112 : 1102, !mp4vFormat)));
+        atom(Atom.TYPE_mdat, getMdat(mp4vFormat ? 1120 : 1110, !mp4vFormat)));
   }
 
   private static Mp4Atom atom(int type, Mp4Atom... containedMp4Atoms) {
@@ -445,15 +446,6 @@ public final class Mp4ExtractorTest extends TestCase {
 
   private static Mp4Atom atom(int type, byte[] payload) {
     return new Mp4Atom(type, payload);
-  }
-
-  private static byte[] getByteArray(String hexBytes) {
-    byte[] result = new byte[hexBytes.length() / 2];
-    for (int i = 0; i < result.length; i++) {
-      result[i] = (byte) ((Character.digit(hexBytes.charAt(i * 2), 16) << 4)
-          + Character.digit(hexBytes.charAt(i * 2 + 1), 16));
-    }
-    return result;
   }
 
   /**

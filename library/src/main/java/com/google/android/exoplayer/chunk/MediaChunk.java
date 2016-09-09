@@ -62,4 +62,12 @@ public abstract class MediaChunk extends Chunk {
     this.chunkIndex = chunkIndex;
   }
 
+  public int getNextChunkIndex() {
+    return chunkIndex + 1;
+  }
+
+  public long getDurationUs() {
+    return endTimeUs - startTimeUs;
+  }
+
 }

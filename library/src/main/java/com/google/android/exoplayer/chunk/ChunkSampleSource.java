@@ -15,6 +15,8 @@
  */
 package com.google.android.exoplayer.chunk;
 
+import android.os.Handler;
+import android.os.SystemClock;
 import com.google.android.exoplayer.C;
 import com.google.android.exoplayer.LoadControl;
 import com.google.android.exoplayer.MediaFormat;
@@ -27,10 +29,6 @@ import com.google.android.exoplayer.extractor.DefaultTrackOutput;
 import com.google.android.exoplayer.upstream.Loader;
 import com.google.android.exoplayer.upstream.Loader.Loadable;
 import com.google.android.exoplayer.util.Assertions;
-
-import android.os.Handler;
-import android.os.SystemClock;
-
 import java.io.IOException;
 import java.util.Collections;
 import java.util.LinkedList;
@@ -52,6 +50,8 @@ public class ChunkSampleSource implements SampleSource, SampleSourceReader, Load
    */
   public static final int DEFAULT_MIN_LOADABLE_RETRY_COUNT = 3;
 
+  protected final DefaultTrackOutput sampleQueue;
+
   private static final int STATE_IDLE = 0;
   private static final int STATE_INITIALIZED = 1;
   private static final int STATE_PREPARED = 2;
@@ -65,7 +65,6 @@ public class ChunkSampleSource implements SampleSource, SampleSourceReader, Load
   private final ChunkOperationHolder currentLoadableHolder;
   private final LinkedList<BaseMediaChunk> mediaChunks;
   private final List<BaseMediaChunk> readOnlyMediaChunks;
-  private final DefaultTrackOutput sampleQueue;
   private final int bufferSizeContribution;
   private final Handler eventHandler;
   private final EventListener eventListener;
@@ -89,11 +88,25 @@ public class ChunkSampleSource implements SampleSource, SampleSourceReader, Load
   private MediaFormat downstreamMediaFormat;
   private Format downstreamFormat;
 
+  /**
+   * @param chunkSource A {@link ChunkSource} from which chunks to load are obtained.
+   * @param loadControl Controls when the source is permitted to load data.
+   * @param bufferSizeContribution The contribution of this source to the media buffer, in bytes.
+   */
   public ChunkSampleSource(ChunkSource chunkSource, LoadControl loadControl,
       int bufferSizeContribution) {
     this(chunkSource, loadControl, bufferSizeContribution, null, null, 0);
   }
 
+  /**
+   * @param chunkSource A {@link ChunkSource} from which chunks to load are obtained.
+   * @param loadControl Controls when the source is permitted to load data.
+   * @param bufferSizeContribution The contribution of this source to the media buffer, in bytes.
+   * @param eventHandler A handler to use when delivering events to {@code eventListener}. May be
+   *     null if delivery of events is not required.
+   * @param eventListener A listener of events. May be null if delivery of events is not required.
+   * @param eventSourceId An identifier that gets passed to {@code eventListener} methods.
+   */
   public ChunkSampleSource(ChunkSource chunkSource, LoadControl loadControl,
       int bufferSizeContribution, Handler eventHandler, EventListener eventListener,
       int eventSourceId) {
@@ -101,6 +114,17 @@ public class ChunkSampleSource implements SampleSource, SampleSourceReader, Load
         eventSourceId, DEFAULT_MIN_LOADABLE_RETRY_COUNT);
   }
 
+  /**
+   * @param chunkSource A {@link ChunkSource} from which chunks to load are obtained.
+   * @param loadControl Controls when the source is permitted to load data.
+   * @param bufferSizeContribution The contribution of this source to the media buffer, in bytes.
+   * @param eventHandler A handler to use when delivering events to {@code eventListener}. May be
+   *     null if delivery of events is not required.
+   * @param eventListener A listener of events. May be null if delivery of events is not required.
+   * @param eventSourceId An identifier that gets passed to {@code eventListener} methods.
+   * @param minLoadableRetryCount The minimum number of times that the source should retry a load
+   *     before propagating an error.
+   */
   public ChunkSampleSource(ChunkSource chunkSource, LoadControl loadControl,
       int bufferSizeContribution, Handler eventHandler, EventListener eventListener,
       int eventSourceId, int minLoadableRetryCount) {
@@ -198,21 +222,21 @@ public class ChunkSampleSource implements SampleSource, SampleSourceReader, Load
   }
 
   @Override
+  public long readDiscontinuity(int track) {
+    if (pendingDiscontinuity) {
+      pendingDiscontinuity = false;
+      return lastSeekPositionUs;
+    }
+    return NO_DISCONTINUITY;
+  }
+
+  @Override
   public int readData(int track, long positionUs, MediaFormatHolder formatHolder,
-      SampleHolder sampleHolder, boolean onlyReadDiscontinuity) {
+      SampleHolder sampleHolder) {
     Assertions.checkState(state == STATE_ENABLED);
     downstreamPositionUs = positionUs;
 
-    if (pendingDiscontinuity) {
-      pendingDiscontinuity = false;
-      return DISCONTINUITY_READ;
-    }
-
-    if (onlyReadDiscontinuity) {
-      return NOTHING_READ;
-    }
-
-    if (isPendingReset()) {
+    if (pendingDiscontinuity || isPendingReset()) {
       return NOTHING_READ;
     }
 
@@ -224,11 +248,11 @@ public class ChunkSampleSource implements SampleSource, SampleSourceReader, Load
       currentChunk = mediaChunks.getFirst();
     }
 
-    if (downstreamFormat == null || !downstreamFormat.equals(currentChunk.format)) {
-      notifyDownstreamFormatChanged(currentChunk.format, currentChunk.trigger,
-          currentChunk.startTimeUs);
-      downstreamFormat = currentChunk.format;
+    Format format = currentChunk.format;
+    if (!format.equals(downstreamFormat)) {
+      notifyDownstreamFormatChanged(format, currentChunk.trigger, currentChunk.startTimeUs);
     }
+    downstreamFormat = format;
 
     if (haveSamples || currentChunk.isMediaFormatFinal) {
       MediaFormat mediaFormat = currentChunk.getMediaFormat();
@@ -238,6 +262,11 @@ public class ChunkSampleSource implements SampleSource, SampleSourceReader, Load
         downstreamMediaFormat = mediaFormat;
         return FORMAT_READ;
       }
+      // If mediaFormat and downstreamMediaFormat are equal but different objects then the equality
+      // check above will have been expensive, comparing the fields in each format. We update
+      // downstreamMediaFormat here so that referential equality can be cheaply established during
+      // subsequent calls.
+      downstreamMediaFormat = mediaFormat;
     }
 
     if (!haveSamples) {
@@ -533,7 +562,8 @@ public class ChunkSampleSource implements SampleSource, SampleSourceReader, Load
   private void doChunkOperation() {
     currentLoadableHolder.endOfStream = false;
     currentLoadableHolder.queueSize = readOnlyMediaChunks.size();
-    chunkSource.getChunkOperation(readOnlyMediaChunks, pendingResetPositionUs, downstreamPositionUs,
+    chunkSource.getChunkOperation(readOnlyMediaChunks,
+        pendingResetPositionUs != NO_RESET_PENDING ? pendingResetPositionUs : downstreamPositionUs,
         currentLoadableHolder);
     loadingFinished = currentLoadableHolder.endOfStream;
   }
@@ -555,6 +585,7 @@ public class ChunkSampleSource implements SampleSource, SampleSourceReader, Load
     while (mediaChunks.size() > queueLength) {
       removed = mediaChunks.removeLast();
       startTimeUs = removed.startTimeUs;
+      loadingFinished = false;
     }
     sampleQueue.discardUpstreamSamples(removed.getFirstSampleIndex());
 

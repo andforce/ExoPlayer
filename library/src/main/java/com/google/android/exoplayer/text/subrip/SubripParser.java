@@ -15,22 +15,15 @@
  */
 package com.google.android.exoplayer.text.subrip;
 
-import com.google.android.exoplayer.C;
-import com.google.android.exoplayer.ParserException;
-import com.google.android.exoplayer.text.Cue;
-import com.google.android.exoplayer.text.SubtitleParser;
-import com.google.android.exoplayer.util.LongArray;
-import com.google.android.exoplayer.util.MimeTypes;
-
 import android.text.Html;
 import android.text.Spanned;
 import android.text.TextUtils;
 import android.util.Log;
-
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import com.google.android.exoplayer.text.Cue;
+import com.google.android.exoplayer.text.SubtitleParser;
+import com.google.android.exoplayer.util.LongArray;
+import com.google.android.exoplayer.util.MimeTypes;
+import com.google.android.exoplayer.util.ParsableByteArray;
 import java.util.ArrayList;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -47,35 +40,26 @@ public final class SubripParser implements SubtitleParser {
       Pattern.compile("(?:(\\d+):)?(\\d+):(\\d+),(\\d+)");
 
   private final StringBuilder textBuilder;
-  private final boolean strictParsing;
 
-  /**
-   * Equivalent to {@code SubripParser(false)}.
-   */
   public SubripParser() {
-    this(false);
-  }
-
-  /**
-   * @param strictParsing If true, {@link #parse(InputStream)} will throw a {@link ParserException}
-   *     if the stream contains invalid data. If false, the parser will make a best effort to ignore
-   *     minor errors in the stream. Note however that a {@link ParserException} will still be
-   *     thrown when this is not possible.
-   */
-  public SubripParser(boolean strictParsing) {
-    this.strictParsing = strictParsing;
     textBuilder = new StringBuilder();
   }
 
   @Override
-  public SubripSubtitle parse(InputStream inputStream) throws IOException {
+  public boolean canParse(String mimeType) {
+    return MimeTypes.APPLICATION_SUBRIP.equals(mimeType);
+  }
+
+  @Override
+  public SubripSubtitle parse(byte[] bytes, int offset, int length) {
     ArrayList<Cue> cues = new ArrayList<>();
     LongArray cueTimesUs = new LongArray();
-    BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, C.UTF8_NAME));
+    ParsableByteArray subripData = new ParsableByteArray(bytes, offset + length);
+    subripData.setPosition(offset);
     boolean haveEndTimecode;
     String currentLine;
 
-    while ((currentLine = reader.readLine()) != null) {
+    while ((currentLine = subripData.readLine()) != null) {
       if (currentLine.length() == 0) {
         // Skip blank lines.
         continue;
@@ -85,17 +69,13 @@ public final class SubripParser implements SubtitleParser {
       try {
         Integer.parseInt(currentLine);
       } catch (NumberFormatException e) {
-        if (!strictParsing) {
-          Log.w(TAG, "Skipping invalid index: " + currentLine);
-          continue;
-        } else {
-          throw new ParserException("Expected numeric counter: " + currentLine);
-        }
+        Log.w(TAG, "Skipping invalid index: " + currentLine);
+        continue;
       }
 
       // Read and parse the timing line.
       haveEndTimecode = false;
-      currentLine = reader.readLine();
+      currentLine = subripData.readLine();
       Matcher matcher = SUBRIP_TIMING_LINE.matcher(currentLine);
       if (matcher.find()) {
         cueTimesUs.add(parseTimecode(matcher.group(1)));
@@ -104,16 +84,14 @@ public final class SubripParser implements SubtitleParser {
           haveEndTimecode = true;
           cueTimesUs.add(parseTimecode(matcher.group(2)));
         }
-      } else if (!strictParsing) {
+      } else {
         Log.w(TAG, "Skipping invalid timing: " + currentLine);
         continue;
-      } else {
-        throw new ParserException("Expected timing line: " + currentLine);
       }
 
       // Read and parse the text.
       textBuilder.setLength(0);
-      while (!TextUtils.isEmpty(currentLine = reader.readLine())) {
+      while (!TextUtils.isEmpty(currentLine = subripData.readLine())) {
         if (textBuilder.length() > 0) {
           textBuilder.append("<br>");
         }
@@ -131,11 +109,6 @@ public final class SubripParser implements SubtitleParser {
     cues.toArray(cuesArray);
     long[] cueTimesUsArray = cueTimesUs.toArray();
     return new SubripSubtitle(cuesArray, cueTimesUsArray);
-  }
-
-  @Override
-  public boolean canParse(String mimeType) {
-    return MimeTypes.APPLICATION_SUBRIP.equals(mimeType);
   }
 
   private static long parseTimecode(String s) throws NumberFormatException {

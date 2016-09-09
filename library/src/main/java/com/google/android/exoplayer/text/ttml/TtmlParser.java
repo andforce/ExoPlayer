@@ -15,29 +15,26 @@
  */
 package com.google.android.exoplayer.text.ttml;
 
+import android.text.Layout;
+import android.util.Log;
+import android.util.Pair;
 import com.google.android.exoplayer.C;
 import com.google.android.exoplayer.ParserException;
-import com.google.android.exoplayer.text.Subtitle;
+import com.google.android.exoplayer.text.Cue;
 import com.google.android.exoplayer.text.SubtitleParser;
 import com.google.android.exoplayer.util.MimeTypes;
 import com.google.android.exoplayer.util.ParserUtil;
 import com.google.android.exoplayer.util.Util;
-
-import android.graphics.Color;
-import android.text.Layout;
-import android.util.Log;
-
-import org.xmlpull.v1.XmlPullParser;
-import org.xmlpull.v1.XmlPullParserException;
-import org.xmlpull.v1.XmlPullParserFactory;
-
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserException;
+import org.xmlpull.v1.XmlPullParserFactory;
 
 /**
  * A simple TTML parser that supports DFXP presentation profile.
@@ -57,96 +54,95 @@ import java.util.regex.Pattern;
  *   <li>time-offset-with-frames
  *   <li>time-offset-with-ticks
  * </ul>
- * </p>
  * @see <a href="http://www.w3.org/TR/ttaf1-dfxp/">TTML specification</a>
  */
 public final class TtmlParser implements SubtitleParser {
 
   private static final String TAG = "TtmlParser";
 
+  private static final String TTP = "http://www.w3.org/ns/ttml#parameter";
+
   private static final String ATTR_BEGIN = "begin";
   private static final String ATTR_DURATION = "dur";
   private static final String ATTR_END = "end";
   private static final String ATTR_STYLE = "style";
+  private static final String ATTR_REGION = "region";
 
   private static final Pattern CLOCK_TIME =
       Pattern.compile("^([0-9][0-9]+):([0-9][0-9]):([0-9][0-9])"
           + "(?:(\\.[0-9]+)|:([0-9][0-9])(?:\\.([0-9]+))?)?$");
   private static final Pattern OFFSET_TIME =
       Pattern.compile("^([0-9]+(?:\\.[0-9]+)?)(h|m|s|ms|f|t)$");
+  private static final Pattern FONT_SIZE = Pattern.compile("^(([0-9]*.)?[0-9]+)(px|em|%)$");
+  private static final Pattern PERCENTAGE_COORDINATES =
+      Pattern.compile("^(\\d+\\.?\\d*?)% (\\d+\\.?\\d*?)%$");
 
-  // TODO: read and apply the following attributes if specified.
-  private static final int DEFAULT_FRAMERATE = 30;
-  private static final int DEFAULT_SUBFRAMERATE = 1;
-  private static final int DEFAULT_TICKRATE = 1;
+  private static final int DEFAULT_FRAME_RATE = 30;
+
+  private static final FrameAndTickRate DEFAULT_FRAME_AND_TICK_RATE =
+      new FrameAndTickRate(DEFAULT_FRAME_RATE, 1, 1);
 
   private final XmlPullParserFactory xmlParserFactory;
-  private final boolean strictParsing;
 
-  /**
-   * Equivalent to {@code TtmlParser(false)}.
-   */
   public TtmlParser() {
-    this(false);
-  }
-
-  /**
-   * @param strictParsing If true, {@link #parse(InputStream)} will throw a {@link ParserException}
-   *     if the stream contains invalid data. If false, the parser will make a best effort to ignore
-   *     minor errors in the stream. Note however that a {@link ParserException} will still be
-   *     thrown when this is not possible.
-   */
-  public TtmlParser(boolean strictParsing) {
-    this.strictParsing = strictParsing;
     try {
       xmlParserFactory = XmlPullParserFactory.newInstance();
+      xmlParserFactory.setNamespaceAware(true);
     } catch (XmlPullParserException e) {
       throw new RuntimeException("Couldn't create XmlPullParserFactory instance", e);
     }
   }
 
   @Override
-  public Subtitle parse(InputStream inputStream) throws IOException {
+  public boolean canParse(String mimeType) {
+    return MimeTypes.APPLICATION_TTML.equals(mimeType);
+  }
+
+  @Override
+  public TtmlSubtitle parse(byte[] bytes, int offset, int length) throws ParserException {
     try {
       XmlPullParser xmlParser = xmlParserFactory.newPullParser();
       Map<String, TtmlStyle> globalStyles = new HashMap<>();
+      Map<String, TtmlRegion> regionMap = new HashMap<>();
+      regionMap.put(TtmlNode.ANONYMOUS_REGION_ID, new TtmlRegion());
+      ByteArrayInputStream inputStream = new ByteArrayInputStream(bytes, offset, length);
       xmlParser.setInput(inputStream, null);
       TtmlSubtitle ttmlSubtitle = null;
       LinkedList<TtmlNode> nodeStack = new LinkedList<>();
       int unsupportedNodeDepth = 0;
       int eventType = xmlParser.getEventType();
+      FrameAndTickRate frameAndTickRate = DEFAULT_FRAME_AND_TICK_RATE;
       while (eventType != XmlPullParser.END_DOCUMENT) {
         TtmlNode parent = nodeStack.peekLast();
         if (unsupportedNodeDepth == 0) {
           String name = xmlParser.getName();
           if (eventType == XmlPullParser.START_TAG) {
+            if (TtmlNode.TAG_TT.equals(name)) {
+              frameAndTickRate = parseFrameAndTickRates(xmlParser);
+            }
             if (!isSupportedTag(name)) {
               Log.i(TAG, "Ignoring unsupported tag: " + xmlParser.getName());
               unsupportedNodeDepth++;
             } else if (TtmlNode.TAG_HEAD.equals(name)) {
-              parseHeader(xmlParser, globalStyles);
+              parseHeader(xmlParser, globalStyles, regionMap);
             } else {
               try {
-                TtmlNode node = parseNode(xmlParser, parent);
+                TtmlNode node = parseNode(xmlParser, parent, regionMap, frameAndTickRate);
                 nodeStack.addLast(node);
                 if (parent != null) {
                   parent.addChild(node);
                 }
               } catch (ParserException e) {
-                if (strictParsing) {
-                  throw e;
-                } else {
-                  Log.w(TAG, "Suppressing parser error", e);
-                  // Treat the node (and by extension, all of its children) as unsupported.
-                  unsupportedNodeDepth++;
-                }
+                Log.w(TAG, "Suppressing parser error", e);
+                // Treat the node (and by extension, all of its children) as unsupported.
+                unsupportedNodeDepth++;
               }
             }
           } else if (eventType == XmlPullParser.TEXT) {
             parent.addChild(TtmlNode.buildTextNode(xmlParser.getText()));
           } else if (eventType == XmlPullParser.END_TAG) {
             if (xmlParser.getName().equals(TtmlNode.TAG_TT)) {
-              ttmlSubtitle = new TtmlSubtitle(nodeStack.getLast(), globalStyles);
+              ttmlSubtitle = new TtmlSubtitle(nodeStack.getLast(), globalStyles, regionMap);
             }
             nodeStack.removeLast();
           }
@@ -163,17 +159,51 @@ public final class TtmlParser implements SubtitleParser {
       return ttmlSubtitle;
     } catch (XmlPullParserException xppe) {
       throw new ParserException("Unable to parse source", xppe);
+    } catch (IOException e) {
+      throw new IllegalStateException("Unexpected error when reading input.", e);
     }
   }
 
-  private Map<String, TtmlStyle> parseHeader(XmlPullParser xmlParser,
-      Map<String, TtmlStyle> globalStyles)
-      throws IOException, XmlPullParserException {
+  private FrameAndTickRate parseFrameAndTickRates(XmlPullParser xmlParser) throws ParserException {
+    int frameRate = DEFAULT_FRAME_RATE;
+    String frameRateStr = xmlParser.getAttributeValue(TTP, "frameRate");
+    if (frameRateStr != null) {
+      frameRate = Integer.parseInt(frameRateStr);
+    }
 
+    float frameRateMultiplier = 1;
+    String frameRateMultiplierStr = xmlParser.getAttributeValue(TTP, "frameRateMultiplier");
+    if (frameRateMultiplierStr != null) {
+      String[] parts = frameRateMultiplierStr.split(" ");
+      if (parts.length != 2) {
+        throw new ParserException("frameRateMultiplier doesn't have 2 parts");
+      }
+      float numerator = Integer.parseInt(parts[0]);
+      float denominator = Integer.parseInt(parts[1]);
+      frameRateMultiplier = numerator / denominator;
+    }
+
+    int subFrameRate = DEFAULT_FRAME_AND_TICK_RATE.subFrameRate;
+    String subFrameRateStr = xmlParser.getAttributeValue(TTP, "subFrameRate");
+    if (subFrameRateStr != null) {
+      subFrameRate = Integer.parseInt(subFrameRateStr);
+    }
+
+    int tickRate = DEFAULT_FRAME_AND_TICK_RATE.tickRate;
+    String tickRateStr = xmlParser.getAttributeValue(TTP, "tickRate");
+    if (tickRateStr != null) {
+      tickRate = Integer.parseInt(tickRateStr);
+    }
+    return new FrameAndTickRate(frameRate * frameRateMultiplier, subFrameRate, tickRate);
+  }
+
+  private Map<String, TtmlStyle> parseHeader(XmlPullParser xmlParser,
+      Map<String, TtmlStyle> globalStyles, Map<String, TtmlRegion> globalRegions)
+      throws IOException, XmlPullParserException {
     do {
       xmlParser.next();
       if (ParserUtil.isStartTag(xmlParser, TtmlNode.TAG_STYLE)) {
-        String parentStyleId = xmlParser.getAttributeValue(null, ATTR_STYLE);
+        String parentStyleId = ParserUtil.getAttributeValue(xmlParser, ATTR_STYLE);
         TtmlStyle style = parseStyleAttributes(xmlParser, new TtmlStyle());
         if (parentStyleId != null) {
           String[] ids = parseStyleIds(parentStyleId);
@@ -184,9 +214,52 @@ public final class TtmlParser implements SubtitleParser {
         if (style.getId() != null) {
           globalStyles.put(style.getId(), style);
         }
+      } else if (ParserUtil.isStartTag(xmlParser, TtmlNode.TAG_REGION)) {
+        Pair<String, TtmlRegion> ttmlRegionInfo = parseRegionAttributes(xmlParser);
+        if (ttmlRegionInfo != null) {
+          globalRegions.put(ttmlRegionInfo.first, ttmlRegionInfo.second);
+        }
       }
     } while (!ParserUtil.isEndTag(xmlParser, TtmlNode.TAG_HEAD));
     return globalStyles;
+  }
+
+  /**
+   * Parses a region declaration. Supports origin and extent definition but only when defined in
+   * terms of percentage of the viewport. Regions that do not correctly declare origin are ignored.
+   */
+  private Pair<String, TtmlRegion> parseRegionAttributes(XmlPullParser xmlParser) {
+    String regionId = ParserUtil.getAttributeValue(xmlParser, TtmlNode.ATTR_ID);
+    String regionOrigin = ParserUtil.getAttributeValue(xmlParser, TtmlNode.ATTR_TTS_ORIGIN);
+    String regionExtent = ParserUtil.getAttributeValue(xmlParser, TtmlNode.ATTR_TTS_EXTENT);
+    if (regionOrigin == null || regionId == null) {
+      return null;
+    }
+    float position = Cue.DIMEN_UNSET;
+    float line = Cue.DIMEN_UNSET;
+    Matcher originMatcher = PERCENTAGE_COORDINATES.matcher(regionOrigin);
+    if (originMatcher.matches()) {
+      try {
+        position = Float.parseFloat(originMatcher.group(1)) / 100.f;
+        line = Float.parseFloat(originMatcher.group(2)) / 100.f;
+      } catch (NumberFormatException e) {
+        Log.w(TAG, "Ignoring region with malformed origin: '" + regionOrigin + "'", e);
+        position = Cue.DIMEN_UNSET;
+      }
+    }
+    float width = Cue.DIMEN_UNSET;
+    if (regionExtent != null) {
+      Matcher extentMatcher = PERCENTAGE_COORDINATES.matcher(regionExtent);
+      if (extentMatcher.matches()) {
+        try {
+          width = Float.parseFloat(extentMatcher.group(1)) / 100.f;
+        } catch (NumberFormatException e) {
+          Log.w(TAG, "Ignoring malformed region extent: '" + regionExtent + "'", e);
+        }
+      }
+    }
+    return position != Cue.DIMEN_UNSET ? new Pair<>(regionId, new TtmlRegion(position, line,
+        Cue.LINE_TYPE_FRACTION, width)) : null;
   }
 
   private String[] parseStyleIds(String parentStyleIds) {
@@ -196,9 +269,8 @@ public final class TtmlParser implements SubtitleParser {
   private TtmlStyle parseStyleAttributes(XmlPullParser parser, TtmlStyle style) {
     int attributeCount = parser.getAttributeCount();
     for (int i = 0; i < attributeCount; i++) {
-      String attributeName = parser.getAttributeName(i);
       String attributeValue = parser.getAttributeValue(i);
-      switch (ParserUtil.removeNamespacePrefix(attributeName)) {
+      switch (parser.getAttributeName(i)) {
         case TtmlNode.ATTR_ID:
           if (TtmlNode.TAG_STYLE.equals(parser.getName())) {
             style = createIfNull(style).setId(attributeValue);
@@ -207,7 +279,7 @@ public final class TtmlParser implements SubtitleParser {
         case TtmlNode.ATTR_TTS_BACKGROUND_COLOR:
           style = createIfNull(style);
           try {
-            style.setBackgroundColor(Color.parseColor(attributeValue));
+            style.setBackgroundColor(TtmlColorParser.parseColor(attributeValue));
           } catch (IllegalArgumentException e) {
             Log.w(TAG, "failed parsing background value: '" + attributeValue + "'");
           }
@@ -215,7 +287,7 @@ public final class TtmlParser implements SubtitleParser {
         case TtmlNode.ATTR_TTS_COLOR:
           style = createIfNull(style);
           try {
-            style.setColor(Color.parseColor(attributeValue));
+            style.setFontColor(TtmlColorParser.parseColor(attributeValue));
           } catch (IllegalArgumentException e) {
             Log.w(TAG, "failed parsing color value: '" + attributeValue + "'");
           }
@@ -224,7 +296,12 @@ public final class TtmlParser implements SubtitleParser {
           style = createIfNull(style).setFontFamily(attributeValue);
           break;
         case TtmlNode.ATTR_TTS_FONT_SIZE:
-          // TODO: handle size
+          try {
+            style = createIfNull(style);
+            parseFontSize(attributeValue, style);
+          } catch (ParserException e) {
+            Log.w(TAG, "failed parsing fontSize value: '" + attributeValue + "'");
+          }
           break;
         case TtmlNode.ATTR_TTS_FONT_WEIGHT:
           style = createIfNull(style).setBold(
@@ -281,36 +358,34 @@ public final class TtmlParser implements SubtitleParser {
     return style == null ? new TtmlStyle() : style;
   }
 
-  @Override
-  public boolean canParse(String mimeType) {
-    return MimeTypes.APPLICATION_TTML.equals(mimeType);
-  }
-
-  private TtmlNode parseNode(XmlPullParser parser, TtmlNode parent) throws ParserException {
+  private TtmlNode parseNode(XmlPullParser parser, TtmlNode parent,
+      Map<String, TtmlRegion> regionMap, FrameAndTickRate frameAndTickRate) throws ParserException {
     long duration = 0;
     long startTime = TtmlNode.UNDEFINED_TIME;
     long endTime = TtmlNode.UNDEFINED_TIME;
+    String regionId = TtmlNode.ANONYMOUS_REGION_ID;
     String[] styleIds = null;
     int attributeCount = parser.getAttributeCount();
     TtmlStyle style = parseStyleAttributes(parser, null);
     for (int i = 0; i < attributeCount; i++) {
-      String attr = ParserUtil.removeNamespacePrefix(parser.getAttributeName(i));
+      String attr = parser.getAttributeName(i);
       String value = parser.getAttributeValue(i);
-      if (attr.equals(ATTR_BEGIN)) {
-        startTime = parseTimeExpression(value,
-            DEFAULT_FRAMERATE, DEFAULT_SUBFRAMERATE, DEFAULT_TICKRATE);
-      } else if (attr.equals(ATTR_END)) {
-        endTime = parseTimeExpression(value,
-            DEFAULT_FRAMERATE, DEFAULT_SUBFRAMERATE, DEFAULT_TICKRATE);
-      } else if (attr.equals(ATTR_DURATION)) {
-        duration = parseTimeExpression(value,
-            DEFAULT_FRAMERATE, DEFAULT_SUBFRAMERATE, DEFAULT_TICKRATE);
-      } else if (attr.equals(ATTR_STYLE)) {
+      if (ATTR_BEGIN.equals(attr)) {
+        startTime = parseTimeExpression(value, frameAndTickRate);
+      } else if (ATTR_END.equals(attr)) {
+        endTime = parseTimeExpression(value, frameAndTickRate);
+      } else if (ATTR_DURATION.equals(attr)) {
+        duration = parseTimeExpression(value, frameAndTickRate);
+      } else if (ATTR_STYLE.equals(attr)) {
         // IDREFS: potentially multiple space delimited ids
         String[] ids = parseStyleIds(value);
         if (ids.length > 0) {
           styleIds = ids;
         }
+      } else if (ATTR_REGION.equals(attr) && regionMap.containsKey(value)) {
+        // If the region has not been correctly declared or does not define a position, we use the
+        // anonymous region.
+        regionId = value;
       } else {
         // Do nothing.
       }
@@ -332,7 +407,7 @@ public final class TtmlParser implements SubtitleParser {
         endTime = parent.endTimeUs;
       }
     }
-    return TtmlNode.buildNode(parser.getName(), startTime, endTime, style, styleIds);
+    return TtmlNode.buildNode(parser.getName(), startTime, endTime, style, styleIds, regionId);
   }
 
   private static boolean isSupportedTag(String tag) {
@@ -356,6 +431,41 @@ public final class TtmlParser implements SubtitleParser {
     return false;
   }
 
+  private static void parseFontSize(String expression, TtmlStyle out) throws ParserException {
+    String[] expressions = expression.split("\\s+");
+    Matcher matcher;
+    if (expressions.length == 1) {
+      matcher = FONT_SIZE.matcher(expression);
+    } else if (expressions.length == 2){
+      matcher = FONT_SIZE.matcher(expressions[1]);
+      Log.w(TAG, "Multiple values in fontSize attribute. Picking the second value for vertical font"
+          + " size and ignoring the first.");
+    } else {
+      throw new ParserException("Invalid number of entries for fontSize: " + expressions.length
+          + ".");
+    }
+
+    if (matcher.matches()) {
+      String unit = matcher.group(3);
+      switch (unit) {
+        case "px":
+          out.setFontSizeUnit(TtmlStyle.FONT_SIZE_UNIT_PIXEL);
+          break;
+        case "em":
+          out.setFontSizeUnit(TtmlStyle.FONT_SIZE_UNIT_EM);
+          break;
+        case "%":
+          out.setFontSizeUnit(TtmlStyle.FONT_SIZE_UNIT_PERCENT);
+          break;
+        default:
+          throw new ParserException("Invalid unit for fontSize: '" + unit + "'.");
+      }
+      out.setFontSize(Float.valueOf(matcher.group(1)));
+    } else {
+      throw new ParserException("Invalid expression for fontSize: '" + expression + "'.");
+    }
+  }
+
   /**
    * Parses a time expression, returning the parsed timestamp.
    * <p>
@@ -363,14 +473,12 @@ public final class TtmlParser implements SubtitleParser {
    * <a href="http://www.w3.org/TR/ttaf1-dfxp/#timing-value-timeExpression">timeExpression</a>
    *
    * @param time A string that includes the time expression.
-   * @param frameRate The frame rate of the stream.
-   * @param subframeRate The sub-frame rate of the stream
-   * @param tickRate The tick rate of the stream.
+   * @param frameAndTickRate The effective frame and tick rates of the stream.
    * @return The parsed timestamp in microseconds.
    * @throws ParserException If the given string does not contain a valid time expression.
    */
-  private static long parseTimeExpression(String time, int frameRate, int subframeRate,
-      int tickRate) throws ParserException {
+  private static long parseTimeExpression(String time, FrameAndTickRate frameAndTickRate)
+      throws ParserException {
     Matcher matcher = CLOCK_TIME.matcher(time);
     if (matcher.matches()) {
       String hours = matcher.group(1);
@@ -382,10 +490,13 @@ public final class TtmlParser implements SubtitleParser {
       String fraction = matcher.group(4);
       durationSeconds += (fraction != null) ? Double.parseDouble(fraction) : 0;
       String frames = matcher.group(5);
-      durationSeconds += (frames != null) ? ((double) Long.parseLong(frames)) / frameRate : 0;
+      durationSeconds += (frames != null)
+          ? Long.parseLong(frames) / frameAndTickRate.effectiveFrameRate : 0;
       String subframes = matcher.group(6);
-      durationSeconds += (subframes != null) ?
-          ((double) Long.parseLong(subframes)) / subframeRate / frameRate : 0;
+      durationSeconds += (subframes != null)
+          ? ((double) Long.parseLong(subframes)) / frameAndTickRate.subFrameRate
+              / frameAndTickRate.effectiveFrameRate
+          : 0;
       return (long) (durationSeconds * C.MICROS_PER_SECOND);
     }
     matcher = OFFSET_TIME.matcher(time);
@@ -402,13 +513,24 @@ public final class TtmlParser implements SubtitleParser {
       } else if (unit.equals("ms")) {
         offsetSeconds /= 1000;
       } else if (unit.equals("f")) {
-        offsetSeconds /= frameRate;
+        offsetSeconds /= frameAndTickRate.effectiveFrameRate;
       } else if (unit.equals("t")) {
-        offsetSeconds /= tickRate;
+        offsetSeconds /= frameAndTickRate.tickRate;
       }
       return (long) (offsetSeconds * C.MICROS_PER_SECOND);
     }
     throw new ParserException("Malformed time expression: " + time);
   }
 
+  private static final class FrameAndTickRate {
+    final float effectiveFrameRate;
+    final int subFrameRate;
+    final int tickRate;
+
+    FrameAndTickRate(float effectiveFrameRate, int subFrameRate, int tickRate) {
+      this.effectiveFrameRate = effectiveFrameRate;
+      this.subFrameRate = subFrameRate;
+      this.tickRate = tickRate;
+    }
+  }
 }

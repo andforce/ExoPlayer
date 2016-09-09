@@ -15,21 +15,21 @@
  */
 package com.google.android.exoplayer;
 
-import com.google.android.exoplayer.MediaCodecUtil.DecoderQueryException;
-import com.google.android.exoplayer.drm.DrmSessionManager;
-import com.google.android.exoplayer.util.MimeTypes;
-import com.google.android.exoplayer.util.TraceUtil;
-import com.google.android.exoplayer.util.Util;
-
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
+import android.content.Context;
 import android.media.MediaCodec;
 import android.media.MediaCrypto;
 import android.os.Handler;
 import android.os.SystemClock;
 import android.view.Surface;
 import android.view.TextureView;
-
+import com.google.android.exoplayer.MediaCodecUtil.DecoderQueryException;
+import com.google.android.exoplayer.drm.DrmSessionManager;
+import com.google.android.exoplayer.drm.FrameworkMediaCrypto;
+import com.google.android.exoplayer.util.MimeTypes;
+import com.google.android.exoplayer.util.TraceUtil;
+import com.google.android.exoplayer.util.Util;
 import java.nio.ByteBuffer;
 
 /**
@@ -86,35 +86,8 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
 
   }
 
-  /**
-   * An interface for fine-grained adjustment of frame release times.
-   */
-  public interface FrameReleaseTimeHelper {
-
-    /**
-     * Enables the helper.
-     */
-    void enable();
-
-    /**
-     * Disables the helper.
-     */
-    void disable();
-
-    /**
-     * Called to make a fine-grained adjustment to a frame release time.
-     *
-     * @param framePresentationTimeUs The frame's media presentation time, in microseconds.
-     * @param unadjustedReleaseTimeNs The frame's unadjusted release time, in nanoseconds and in
-     *     the same time base as {@link System#nanoTime()}.
-     * @return An adjusted release time for the frame, in nanoseconds and in the same time base as
-     *     {@link System#nanoTime()}.
-     */
-    public long adjustReleaseTime(long framePresentationTimeUs, long unadjustedReleaseTimeNs);
-
-  }
-
-  // TODO: Use MediaFormat constants if these get exposed through the API. See [Internal: b/14127601].
+  // TODO: Use MediaFormat constants if these get exposed through the API. See
+  // [Internal: b/14127601].
   private static final String KEY_CROP_LEFT = "crop-left";
   private static final String KEY_CROP_RIGHT = "crop-right";
   private static final String KEY_CROP_BOTTOM = "crop-bottom";
@@ -127,7 +100,7 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
    */
   public static final int MSG_SET_SURFACE = 1;
 
-  private final FrameReleaseTimeHelper frameReleaseTimeHelper;
+  private final VideoFrameReleaseTimeHelper frameReleaseTimeHelper;
   private final EventListener eventListener;
   private final long allowedJoiningTimeUs;
   private final int videoScalingMode;
@@ -139,6 +112,7 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
   private long joiningDeadlineUs;
   private long droppedFrameAccumulationStartTimeMs;
   private int droppedFrameCount;
+  private int consecutiveDroppedFrameCount;
 
   private int pendingRotationDegrees;
   private float pendingPixelWidthHeightRatio;
@@ -152,65 +126,36 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
   private float lastReportedPixelWidthHeightRatio;
 
   /**
+   * @param context A context.
    * @param source The upstream source from which the renderer obtains samples.
+   * @param mediaCodecSelector A decoder selector.
    * @param videoScalingMode The scaling mode to pass to
    *     {@link MediaCodec#setVideoScalingMode(int)}.
    */
-  public MediaCodecVideoTrackRenderer(SampleSource source, int videoScalingMode) {
-    this(source, null, true, videoScalingMode);
+  public MediaCodecVideoTrackRenderer(Context context, SampleSource source,
+      MediaCodecSelector mediaCodecSelector, int videoScalingMode) {
+    this(context, source, mediaCodecSelector, videoScalingMode, 0);
   }
 
   /**
+   * @param context A context.
    * @param source The upstream source from which the renderer obtains samples.
-   * @param drmSessionManager For use with encrypted content. May be null if support for encrypted
-   *     content is not required.
-   * @param playClearSamplesWithoutKeys Encrypted media may contain clear (un-encrypted) regions.
-   *     For example a media file may start with a short clear region so as to allow playback to
-   *     begin in parallel with key acquisision. This parameter specifies whether the renderer is
-   *     permitted to play clear regions of encrypted media files before {@code drmSessionManager}
-   *     has obtained the keys necessary to decrypt encrypted regions of the media.
-   * @param videoScalingMode The scaling mode to pass to
-   *     {@link MediaCodec#setVideoScalingMode(int)}.
-   */
-  public MediaCodecVideoTrackRenderer(SampleSource source, DrmSessionManager drmSessionManager,
-      boolean playClearSamplesWithoutKeys, int videoScalingMode) {
-    this(source, drmSessionManager, playClearSamplesWithoutKeys, videoScalingMode, 0);
-  }
-
-  /**
-   * @param source The upstream source from which the renderer obtains samples.
+   * @param mediaCodecSelector A decoder selector.
    * @param videoScalingMode The scaling mode to pass to
    *     {@link MediaCodec#setVideoScalingMode(int)}.
    * @param allowedJoiningTimeMs The maximum duration in milliseconds for which this video renderer
    *     can attempt to seamlessly join an ongoing playback.
    */
-  public MediaCodecVideoTrackRenderer(SampleSource source, int videoScalingMode,
-      long allowedJoiningTimeMs) {
-    this(source, null, true, videoScalingMode, allowedJoiningTimeMs);
+  public MediaCodecVideoTrackRenderer(Context context, SampleSource source,
+      MediaCodecSelector mediaCodecSelector, int videoScalingMode, long allowedJoiningTimeMs) {
+    this(context, source, mediaCodecSelector, videoScalingMode, allowedJoiningTimeMs, null, null,
+        -1);
   }
 
   /**
+   * @param context A context.
    * @param source The upstream source from which the renderer obtains samples.
-   * @param drmSessionManager For use with encrypted content. May be null if support for encrypted
-   *     content is not required.
-   * @param playClearSamplesWithoutKeys Encrypted media may contain clear (un-encrypted) regions.
-   *     For example a media file may start with a short clear region so as to allow playback to
-   *     begin in parallel with key acquisision. This parameter specifies whether the renderer is
-   *     permitted to play clear regions of encrypted media files before {@code drmSessionManager}
-   *     has obtained the keys necessary to decrypt encrypted regions of the media.
-   * @param videoScalingMode The scaling mode to pass to
-   *     {@link MediaCodec#setVideoScalingMode(int)}.
-   * @param allowedJoiningTimeMs The maximum duration in milliseconds for which this video renderer
-   *     can attempt to seamlessly join an ongoing playback.
-   */
-  public MediaCodecVideoTrackRenderer(SampleSource source, DrmSessionManager drmSessionManager,
-      boolean playClearSamplesWithoutKeys, int videoScalingMode, long allowedJoiningTimeMs) {
-    this(source, drmSessionManager, playClearSamplesWithoutKeys, videoScalingMode,
-        allowedJoiningTimeMs, null, null, null, -1);
-  }
-
-  /**
-   * @param source The upstream source from which the renderer obtains samples.
+   * @param mediaCodecSelector A decoder selector.
    * @param videoScalingMode The scaling mode to pass to
    *     {@link MediaCodec#setVideoScalingMode(int)}.
    * @param allowedJoiningTimeMs The maximum duration in milliseconds for which this video renderer
@@ -221,42 +166,44 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
    * @param maxDroppedFrameCountToNotify The maximum number of frames that can be dropped between
    *     invocations of {@link EventListener#onDroppedFrames(int, long)}.
    */
-  public MediaCodecVideoTrackRenderer(SampleSource source, int videoScalingMode,
-      long allowedJoiningTimeMs, Handler eventHandler, EventListener eventListener,
+  public MediaCodecVideoTrackRenderer(Context context, SampleSource source,
+      MediaCodecSelector mediaCodecSelector, int videoScalingMode, long allowedJoiningTimeMs,
+      Handler eventHandler, EventListener eventListener, int maxDroppedFrameCountToNotify) {
+    this(context, source, mediaCodecSelector, videoScalingMode, allowedJoiningTimeMs, null, false,
+        eventHandler, eventListener, maxDroppedFrameCountToNotify);
+  }
+
+  /**
+   * @param context A context.
+   * @param source The upstream source from which the renderer obtains samples.
+   * @param mediaCodecSelector A decoder selector.
+   * @param videoScalingMode The scaling mode to pass to
+   *     {@link MediaCodec#setVideoScalingMode(int)}.
+   * @param allowedJoiningTimeMs The maximum duration in milliseconds for which this video renderer
+   *     can attempt to seamlessly join an ongoing playback.
+   * @param drmSessionManager For use with encrypted content. May be null if support for encrypted
+   *     content is not required.
+   * @param playClearSamplesWithoutKeys Encrypted media may contain clear (un-encrypted) regions.
+   *     For example a media file may start with a short clear region so as to allow playback to
+   *     begin in parallel with key acquisision. This parameter specifies whether the renderer is
+   *     permitted to play clear regions of encrypted media files before {@code drmSessionManager}
+   *     has obtained the keys necessary to decrypt encrypted regions of the media.
+   * @param eventHandler A handler to use when delivering events to {@code eventListener}. May be
+   *     null if delivery of events is not required.
+   * @param eventListener A listener of events. May be null if delivery of events is not required.
+   * @param maxDroppedFrameCountToNotify The maximum number of frames that can be dropped between
+   *     invocations of {@link EventListener#onDroppedFrames(int, long)}.
+   */
+  public MediaCodecVideoTrackRenderer(Context context, SampleSource source,
+      MediaCodecSelector mediaCodecSelector, int videoScalingMode, long allowedJoiningTimeMs,
+      DrmSessionManager<FrameworkMediaCrypto> drmSessionManager,
+      boolean playClearSamplesWithoutKeys, Handler eventHandler, EventListener eventListener,
       int maxDroppedFrameCountToNotify) {
-    this(source, null, true, videoScalingMode, allowedJoiningTimeMs, null, eventHandler,
-        eventListener, maxDroppedFrameCountToNotify);
-  }
-
-  /**
-   * @param source The upstream source from which the renderer obtains samples.
-   * @param drmSessionManager For use with encrypted content. May be null if support for encrypted
-   *     content is not required.
-   * @param playClearSamplesWithoutKeys Encrypted media may contain clear (un-encrypted) regions.
-   *     For example a media file may start with a short clear region so as to allow playback to
-   *     begin in parallel with key acquisision. This parameter specifies whether the renderer is
-   *     permitted to play clear regions of encrypted media files before {@code drmSessionManager}
-   *     has obtained the keys necessary to decrypt encrypted regions of the media.
-   * @param videoScalingMode The scaling mode to pass to
-   *     {@link MediaCodec#setVideoScalingMode(int)}.
-   * @param allowedJoiningTimeMs The maximum duration in milliseconds for which this video renderer
-   *     can attempt to seamlessly join an ongoing playback.
-   * @param frameReleaseTimeHelper An optional helper to make fine-grained adjustments to frame
-   *     release times. May be null.
-   * @param eventHandler A handler to use when delivering events to {@code eventListener}. May be
-   *     null if delivery of events is not required.
-   * @param eventListener A listener of events. May be null if delivery of events is not required.
-   * @param maxDroppedFrameCountToNotify The maximum number of frames that can be dropped between
-   *     invocations of {@link EventListener#onDroppedFrames(int, long)}.
-   */
-  public MediaCodecVideoTrackRenderer(SampleSource source, DrmSessionManager drmSessionManager,
-      boolean playClearSamplesWithoutKeys, int videoScalingMode, long allowedJoiningTimeMs,
-      FrameReleaseTimeHelper frameReleaseTimeHelper, Handler eventHandler,
-      EventListener eventListener, int maxDroppedFrameCountToNotify) {
-    super(source, drmSessionManager, playClearSamplesWithoutKeys, eventHandler, eventListener);
+    super(source, mediaCodecSelector, drmSessionManager, playClearSamplesWithoutKeys, eventHandler,
+        eventListener);
+    this.frameReleaseTimeHelper = new VideoFrameReleaseTimeHelper(context);
     this.videoScalingMode = videoScalingMode;
     this.allowedJoiningTimeUs = allowedJoiningTimeMs * 1000;
-    this.frameReleaseTimeHelper = frameReleaseTimeHelper;
     this.eventListener = eventListener;
     this.maxDroppedFrameCountToNotify = maxDroppedFrameCountToNotify;
     joiningDeadlineUs = -1;
@@ -270,30 +217,28 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
   }
 
   @Override
-  protected boolean handlesTrack(MediaFormat mediaFormat) throws DecoderQueryException {
-    // TODO: Use MediaCodecList.findDecoderForFormat on API 23.
+  protected boolean handlesTrack(MediaCodecSelector mediaCodecSelector, MediaFormat mediaFormat)
+      throws DecoderQueryException {
     String mimeType = mediaFormat.mimeType;
     return MimeTypes.isVideo(mimeType) && (MimeTypes.VIDEO_UNKNOWN.equals(mimeType)
-        || MediaCodecUtil.getDecoderInfo(mimeType, false) != null);
+        || mediaCodecSelector.getDecoderInfo(mimeType, false) != null);
   }
 
   @Override
   protected void onEnabled(int track, long positionUs, boolean joining)
       throws ExoPlaybackException {
     super.onEnabled(track, positionUs, joining);
-    renderedFirstFrame = false;
     if (joining && allowedJoiningTimeUs > 0) {
       joiningDeadlineUs = SystemClock.elapsedRealtime() * 1000L + allowedJoiningTimeUs;
     }
-    if (frameReleaseTimeHelper != null) {
-      frameReleaseTimeHelper.enable();
-    }
+    frameReleaseTimeHelper.enable();
   }
 
   @Override
-  protected void seekTo(long positionUs) throws ExoPlaybackException {
-    super.seekTo(positionUs);
+  protected void onDiscontinuity(long positionUs) throws ExoPlaybackException {
+    super.onDiscontinuity(positionUs);
     renderedFirstFrame = false;
+    consecutiveDroppedFrameCount = 0;
     joiningDeadlineUs = -1;
   }
 
@@ -340,9 +285,7 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
     lastReportedWidth = -1;
     lastReportedHeight = -1;
     lastReportedPixelWidthHeightRatio = -1;
-    if (frameReleaseTimeHelper != null) {
-      frameReleaseTimeHelper.disable();
-    }
+    frameReleaseTimeHelper.disable();
     super.onDisabled();
   }
 
@@ -379,11 +322,10 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
 
   // Override configureCodec to provide the surface.
   @Override
-  protected void configureCodec(MediaCodec codec, String codecName, boolean codecIsAdaptive,
+  protected void configureCodec(MediaCodec codec, boolean codecIsAdaptive,
       android.media.MediaFormat format, MediaCrypto crypto) {
     maybeSetMaxInputSize(format, codecIsAdaptive);
     codec.configure(format, surface, crypto, 0);
-    codec.setVideoScalingMode(videoScalingMode);
   }
 
   @Override
@@ -403,7 +345,7 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
   }
 
   @Override
-  protected void onOutputFormatChanged(android.media.MediaFormat outputFormat) {
+  protected void onOutputFormatChanged(MediaCodec codec, android.media.MediaFormat outputFormat) {
     boolean hasCrop = outputFormat.containsKey(KEY_CROP_RIGHT)
         && outputFormat.containsKey(KEY_CROP_LEFT) && outputFormat.containsKey(KEY_CROP_BOTTOM)
         && outputFormat.containsKey(KEY_CROP_TOP);
@@ -428,6 +370,8 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
       // On API level 20 and below the decoder does not apply the rotation.
       currentUnappliedRotationDegrees = pendingRotationDegrees;
     }
+    // Must be applied each time the output format changes.
+    codec.setVideoScalingMode(videoScalingMode);
   }
 
   @Override
@@ -443,6 +387,7 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
       ByteBuffer buffer, MediaCodec.BufferInfo bufferInfo, int bufferIndex, boolean shouldSkip) {
     if (shouldSkip) {
       skipOutputBuffer(codec, bufferIndex);
+      consecutiveDroppedFrameCount = 0;
       return true;
     }
 
@@ -452,6 +397,7 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
       } else {
         renderOutputBuffer(codec, bufferIndex);
       }
+      consecutiveDroppedFrameCount = 0;
       return true;
     }
 
@@ -468,14 +414,9 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
     long unadjustedFrameReleaseTimeNs = systemTimeNs + (earlyUs * 1000);
 
     // Apply a timestamp adjustment, if there is one.
-    long adjustedReleaseTimeNs;
-    if (frameReleaseTimeHelper != null) {
-      adjustedReleaseTimeNs = frameReleaseTimeHelper.adjustReleaseTime(
-          bufferInfo.presentationTimeUs, unadjustedFrameReleaseTimeNs);
-      earlyUs = (adjustedReleaseTimeNs - systemTimeNs) / 1000;
-    } else {
-      adjustedReleaseTimeNs = unadjustedFrameReleaseTimeNs;
-    }
+    long adjustedReleaseTimeNs = frameReleaseTimeHelper.adjustReleaseTime(
+        bufferInfo.presentationTimeUs, unadjustedFrameReleaseTimeNs);
+    earlyUs = (adjustedReleaseTimeNs - systemTimeNs) / 1000;
 
     if (earlyUs < -30000) {
       // We're more than 30ms late rendering the frame.
@@ -487,6 +428,7 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
       // Let the underlying framework time the release.
       if (earlyUs < 50000) {
         renderOutputBufferV21(codec, bufferIndex, adjustedReleaseTimeNs);
+        consecutiveDroppedFrameCount = 0;
         return true;
       }
     } else {
@@ -503,6 +445,7 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
           }
         }
         renderOutputBuffer(codec, bufferIndex);
+        consecutiveDroppedFrameCount = 0;
         return true;
       }
     }
@@ -524,6 +467,9 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
     TraceUtil.endSection();
     codecCounters.droppedOutputBufferCount++;
     droppedFrameCount++;
+    consecutiveDroppedFrameCount++;
+    codecCounters.maxConsecutiveDroppedOutputBufferCount = Math.max(consecutiveDroppedFrameCount,
+        codecCounters.maxConsecutiveDroppedOutputBufferCount);
     if (droppedFrameCount == maxDroppedFrameCountToNotify) {
       maybeNotifyDroppedFrameCount();
     }
@@ -552,10 +498,6 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
 
   @SuppressLint("InlinedApi")
   private void maybeSetMaxInputSize(android.media.MediaFormat format, boolean codecIsAdaptive) {
-    if (!MimeTypes.VIDEO_H264.equals(format.getString(android.media.MediaFormat.KEY_MIME))) {
-      // Only set a max input size for H264 for now.
-      return;
-    }
     if (format.containsKey(android.media.MediaFormat.KEY_MAX_INPUT_SIZE)) {
       // Already set. The source of the format may know better, so do nothing.
       return;
@@ -568,8 +510,40 @@ public class MediaCodecVideoTrackRenderer extends MediaCodecTrackRenderer {
     if (codecIsAdaptive && format.containsKey(android.media.MediaFormat.KEY_MAX_WIDTH)) {
       maxWidth = Math.max(maxHeight, format.getInteger(android.media.MediaFormat.KEY_MAX_WIDTH));
     }
-    // H264 requires compression ratio of at least 2, and uses macroblocks.
-    int maxInputSize = ((maxWidth + 15) / 16) * ((maxHeight + 15) / 16) * 192;
+    int maxPixels;
+    int minCompressionRatio;
+    switch (format.getString(android.media.MediaFormat.KEY_MIME)) {
+      case MimeTypes.VIDEO_H263:
+      case MimeTypes.VIDEO_MP4V:
+        maxPixels = maxWidth * maxHeight;
+        minCompressionRatio = 2;
+        break;
+      case MimeTypes.VIDEO_H264:
+        if ("BRAVIA 4K 2015".equals(Util.MODEL)) {
+          // The Sony BRAVIA 4k TV has input buffers that are too small for the calculated 4k video
+          // maximum input size, so use the default value.
+          return;
+        }
+        // Round up width/height to an integer number of macroblocks.
+        maxPixels = ((maxWidth + 15) / 16) * ((maxHeight + 15) / 16) * 16 * 16;
+        minCompressionRatio = 2;
+        break;
+      case MimeTypes.VIDEO_VP8:
+        // VPX does not specify a ratio so use the values from the platform's SoftVPX.cpp.
+        maxPixels = maxWidth * maxHeight;
+        minCompressionRatio = 2;
+        break;
+      case MimeTypes.VIDEO_H265:
+      case MimeTypes.VIDEO_VP9:
+        maxPixels = maxWidth * maxHeight;
+        minCompressionRatio = 4;
+        break;
+      default:
+        // Leave the default max input size.
+        return;
+    }
+    // Estimate the maximum input size assuming three channel 4:2:0 subsampled input frames.
+    int maxInputSize = (maxPixels * 3) / (2 * minCompressionRatio);
     format.setInteger(android.media.MediaFormat.KEY_MAX_INPUT_SIZE, maxInputSize);
   }
 

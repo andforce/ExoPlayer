@@ -22,7 +22,6 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.media.AudioFormat;
 import android.media.AudioManager;
-
 import java.util.Arrays;
 
 /**
@@ -32,9 +31,9 @@ import java.util.Arrays;
 public final class AudioCapabilities {
 
   /**
-   * Default to stereo PCM on SDK < 21 and when HDMI is unplugged.
+   * The minimum audio capabilities supported by all devices.
    */
-  private static final AudioCapabilities DEFAULT_AUDIO_CAPABILITIES =
+  public static final AudioCapabilities DEFAULT_AUDIO_CAPABILITIES =
       new AudioCapabilities(new int[] {AudioFormat.ENCODING_PCM_16BIT}, 2);
 
   /**

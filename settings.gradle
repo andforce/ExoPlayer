@@ -13,11 +13,15 @@
 // limitations under the License.
 include ':library'
 include ':demo'
+include ':demo-ext'
 include ':playbacktests'
-include ':opus-extension'
-include ':vp9-extension'
-include ':webm-sw-demo'
+include ':extension-opus'
+include ':extension-vp9'
+include ':extension-okhttp'
+include ':extension-flac'
 
-project(':opus-extension').projectDir = new File(settingsDir, 'extensions/opus')
-project(':vp9-extension').projectDir = new File(settingsDir, 'extensions/vp9')
-project(':webm-sw-demo').projectDir = new File(settingsDir, 'demo_misc/webm_sw_decoder')
+project(':demo-ext').projectDir = new File(settingsDir, 'demo_ext')
+project(':extension-opus').projectDir = new File(settingsDir, 'extensions/opus')
+project(':extension-vp9').projectDir = new File(settingsDir, 'extensions/vp9')
+project(':extension-okhttp').projectDir = new File(settingsDir, 'extensions/okhttp')
+project(':extension-flac').projectDir = new File(settingsDir, 'extensions/flac')

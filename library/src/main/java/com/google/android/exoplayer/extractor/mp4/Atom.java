@@ -17,7 +17,6 @@ package com.google.android.exoplayer.extractor.mp4;
 
 import com.google.android.exoplayer.util.ParsableByteArray;
 import com.google.android.exoplayer.util.Util;
-
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -53,6 +52,9 @@ import java.util.List;
   public static final int TYPE_d263 = Util.getIntegerCodeForString("d263");
   public static final int TYPE_mdat = Util.getIntegerCodeForString("mdat");
   public static final int TYPE_mp4a = Util.getIntegerCodeForString("mp4a");
+  public static final int TYPE_wave = Util.getIntegerCodeForString("wave");
+  public static final int TYPE_lpcm = Util.getIntegerCodeForString("lpcm");
+  public static final int TYPE_sowt = Util.getIntegerCodeForString("sowt");
   public static final int TYPE_ac_3 = Util.getIntegerCodeForString("ac-3");
   public static final int TYPE_dac3 = Util.getIntegerCodeForString("dac3");
   public static final int TYPE_ec_3 = Util.getIntegerCodeForString("ec-3");
@@ -79,7 +81,10 @@ import java.util.List;
   public static final int TYPE_moof = Util.getIntegerCodeForString("moof");
   public static final int TYPE_traf = Util.getIntegerCodeForString("traf");
   public static final int TYPE_mvex = Util.getIntegerCodeForString("mvex");
+  public static final int TYPE_mehd = Util.getIntegerCodeForString("mehd");
   public static final int TYPE_tkhd = Util.getIntegerCodeForString("tkhd");
+  public static final int TYPE_edts = Util.getIntegerCodeForString("edts");
+  public static final int TYPE_elst = Util.getIntegerCodeForString("elst");
   public static final int TYPE_mdhd = Util.getIntegerCodeForString("mdhd");
   public static final int TYPE_hdlr = Util.getIntegerCodeForString("hdlr");
   public static final int TYPE_stsd = Util.getIntegerCodeForString("stsd");
@@ -92,22 +97,39 @@ import java.util.List;
   public static final int TYPE_enca = Util.getIntegerCodeForString("enca");
   public static final int TYPE_frma = Util.getIntegerCodeForString("frma");
   public static final int TYPE_saiz = Util.getIntegerCodeForString("saiz");
+  public static final int TYPE_saio = Util.getIntegerCodeForString("saio");
+  public static final int TYPE_sbgp = Util.getIntegerCodeForString("sbgp");
+  public static final int TYPE_sgpd = Util.getIntegerCodeForString("sgpd");
   public static final int TYPE_uuid = Util.getIntegerCodeForString("uuid");
   public static final int TYPE_senc = Util.getIntegerCodeForString("senc");
   public static final int TYPE_pasp = Util.getIntegerCodeForString("pasp");
   public static final int TYPE_TTML = Util.getIntegerCodeForString("TTML");
   public static final int TYPE_vmhd = Util.getIntegerCodeForString("vmhd");
-  public static final int TYPE_smhd = Util.getIntegerCodeForString("smhd");
   public static final int TYPE_mp4v = Util.getIntegerCodeForString("mp4v");
   public static final int TYPE_stts = Util.getIntegerCodeForString("stts");
   public static final int TYPE_stss = Util.getIntegerCodeForString("stss");
   public static final int TYPE_ctts = Util.getIntegerCodeForString("ctts");
   public static final int TYPE_stsc = Util.getIntegerCodeForString("stsc");
   public static final int TYPE_stsz = Util.getIntegerCodeForString("stsz");
+  public static final int TYPE_stz2 = Util.getIntegerCodeForString("stz2");
   public static final int TYPE_stco = Util.getIntegerCodeForString("stco");
   public static final int TYPE_co64 = Util.getIntegerCodeForString("co64");
   public static final int TYPE_tx3g = Util.getIntegerCodeForString("tx3g");
+  public static final int TYPE_wvtt = Util.getIntegerCodeForString("wvtt");
   public static final int TYPE_stpp = Util.getIntegerCodeForString("stpp");
+  public static final int TYPE_samr = Util.getIntegerCodeForString("samr");
+  public static final int TYPE_sawb = Util.getIntegerCodeForString("sawb");
+  public static final int TYPE_udta = Util.getIntegerCodeForString("udta");
+  public static final int TYPE_meta = Util.getIntegerCodeForString("meta");
+  public static final int TYPE_ilst = Util.getIntegerCodeForString("ilst");
+  public static final int TYPE_mean = Util.getIntegerCodeForString("mean");
+  public static final int TYPE_name = Util.getIntegerCodeForString("name");
+  public static final int TYPE_data = Util.getIntegerCodeForString("data");
+  public static final int TYPE_emsg = Util.getIntegerCodeForString("emsg");
+  public static final int TYPE_vp08 = Util.getIntegerCodeForString("vp08");
+  public static final int TYPE_vp09 = Util.getIntegerCodeForString("vp09");
+  public static final int TYPE_vpcC = Util.getIntegerCodeForString("vpcC");
+  public static final int TYPE_DASHES = Util.getIntegerCodeForString("----");
 
   public final int type;
 
@@ -217,6 +239,31 @@ import java.util.List;
         }
       }
       return null;
+    }
+
+    /**
+     * Returns the total number of leaf/container children of this atom with the given type.
+     *
+     * @param type The type of child atoms to count.
+     * @return The total number of leaf/container children of this atom with the given type.
+     */
+    public int getChildAtomOfTypeCount(int type) {
+      int count = 0;
+      int size = leafChildren.size();
+      for (int i = 0; i < size; i++) {
+        LeafAtom atom = leafChildren.get(i);
+        if (atom.type == type) {
+          count++;
+        }
+      }
+      size = containerChildren.size();
+      for (int i = 0; i < size; i++) {
+        ContainerAtom atom = containerChildren.get(i);
+        if (atom.type == type) {
+          count++;
+        }
+      }
+      return count;
     }
 
     @Override

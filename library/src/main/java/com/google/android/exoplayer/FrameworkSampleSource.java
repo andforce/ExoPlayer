@@ -15,20 +15,19 @@
  */
 package com.google.android.exoplayer;
 
-import com.google.android.exoplayer.SampleSource.SampleSourceReader;
-import com.google.android.exoplayer.drm.DrmInitData;
-import com.google.android.exoplayer.extractor.ExtractorSampleSource;
-import com.google.android.exoplayer.extractor.mp4.PsshAtomUtil;
-import com.google.android.exoplayer.util.Assertions;
-import com.google.android.exoplayer.util.MimeTypes;
-import com.google.android.exoplayer.util.Util;
-
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.content.Context;
 import android.media.MediaExtractor;
 import android.net.Uri;
-
+import com.google.android.exoplayer.SampleSource.SampleSourceReader;
+import com.google.android.exoplayer.drm.DrmInitData;
+import com.google.android.exoplayer.drm.DrmInitData.SchemeInitData;
+import com.google.android.exoplayer.extractor.ExtractorSampleSource;
+import com.google.android.exoplayer.extractor.mp4.PsshAtomUtil;
+import com.google.android.exoplayer.util.Assertions;
+import com.google.android.exoplayer.util.MimeTypes;
+import com.google.android.exoplayer.util.Util;
 import java.io.FileDescriptor;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -41,10 +40,11 @@ import java.util.UUID;
  * <p>
  * Warning - This class is marked as deprecated because there are known device specific issues
  * associated with its use, including playbacks not starting, playbacks stuttering and other
- * miscellaneous failures. For mp4, m4a, mp3, webm, mkv, mpeg-ts and aac playbacks it is strongly
- * recommended to use {@link ExtractorSampleSource} instead. Where this is not possible this class
- * can still be used, but please be aware of the associated risks. Playing container formats for
- * which an ExoPlayer extractor does not yet exist (e.g. ogg) is a valid use case of this class.
+ * miscellaneous failures. For mp4, m4a, mp3, webm, mkv, mpeg-ts, ogg, wav and aac playbacks it is
+ * strongly recommended to use {@link ExtractorSampleSource} instead. Where this is not possible
+ * this class can still be used, but please be aware of the associated risks. Playing container
+ * formats for which an ExoPlayer extractor does not yet exist (e.g. avi) is a valid use case of
+ * this class.
  * <p>
  * Over time we hope to enhance {@link ExtractorSampleSource} to support more formats, and hence
  * make use of this class unnecessary.
@@ -79,7 +79,8 @@ public final class FrameworkSampleSource implements SampleSource, SampleSourceRe
   private int[] trackStates;
   private boolean[] pendingDiscontinuities;
 
-  private long seekPositionUs;
+  private long lastSeekPositionUs;
+  private long pendingSeekPositionUs;
 
   /**
    * Instantiates a new sample extractor reading from the specified {@code uri}.
@@ -184,15 +185,20 @@ public final class FrameworkSampleSource implements SampleSource, SampleSourceRe
   }
 
   @Override
+  public long readDiscontinuity(int track) {
+    if (pendingDiscontinuities[track]) {
+      pendingDiscontinuities[track] = false;
+      return lastSeekPositionUs;
+    }
+    return NO_DISCONTINUITY;
+  }
+
+  @Override
   public int readData(int track, long positionUs, MediaFormatHolder formatHolder,
-      SampleHolder sampleHolder, boolean onlyReadDiscontinuity) {
+      SampleHolder sampleHolder) {
     Assertions.checkState(prepared);
     Assertions.checkState(trackStates[track] != TRACK_STATE_DISABLED);
     if (pendingDiscontinuities[track]) {
-      pendingDiscontinuities[track] = false;
-      return DISCONTINUITY_READ;
-    }
-    if (onlyReadDiscontinuity) {
       return NOTHING_READ;
     }
     if (trackStates[track] != TRACK_STATE_FORMAT_SENT) {
@@ -215,7 +221,7 @@ public final class FrameworkSampleSource implements SampleSource, SampleSourceRe
       if (sampleHolder.isEncrypted()) {
         sampleHolder.cryptoInfo.setFromExtractorV16(extractor);
       }
-      seekPositionUs = C.UNKNOWN_TIME_US;
+      pendingSeekPositionUs = C.UNKNOWN_TIME_US;
       extractor.advance();
       return SAMPLE_READ;
     } else {
@@ -273,10 +279,10 @@ public final class FrameworkSampleSource implements SampleSource, SampleSourceRe
     if (psshInfo == null || psshInfo.isEmpty()) {
       return null;
     }
-    DrmInitData.Mapped drmInitData = new DrmInitData.Mapped(MimeTypes.VIDEO_MP4);
+    DrmInitData.Mapped drmInitData = new DrmInitData.Mapped();
     for (UUID uuid : psshInfo.keySet()) {
       byte[] psshAtom = PsshAtomUtil.buildPsshAtom(uuid, psshInfo.get(uuid));
-      drmInitData.put(uuid, psshAtom);
+      drmInitData.put(uuid, new SchemeInitData(MimeTypes.VIDEO_MP4, psshAtom));
     }
     return drmInitData;
   }
@@ -284,8 +290,9 @@ public final class FrameworkSampleSource implements SampleSource, SampleSourceRe
   private void seekToUsInternal(long positionUs, boolean force) {
     // Unless forced, avoid duplicate calls to the underlying extractor's seek method in the case
     // that there have been no interleaving calls to readSample.
-    if (force || seekPositionUs != positionUs) {
-      seekPositionUs = positionUs;
+    if (force || pendingSeekPositionUs != positionUs) {
+      lastSeekPositionUs = positionUs;
+      pendingSeekPositionUs = positionUs;
       extractor.seekTo(positionUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
       for (int i = 0; i < trackStates.length; ++i) {
         if (trackStates[i] != TRACK_STATE_DISABLED) {
@@ -305,6 +312,8 @@ public final class FrameworkSampleSource implements SampleSource, SampleSourceRe
     int rotationDegrees = getOptionalIntegerV16(format, "rotation-degrees");
     int channelCount = getOptionalIntegerV16(format, android.media.MediaFormat.KEY_CHANNEL_COUNT);
     int sampleRate = getOptionalIntegerV16(format, android.media.MediaFormat.KEY_SAMPLE_RATE);
+    int encoderDelay = getOptionalIntegerV16(format, "encoder-delay");
+    int encoderPadding = getOptionalIntegerV16(format, "encoder-padding");
     ArrayList<byte[]> initializationData = new ArrayList<>();
     for (int i = 0; format.containsKey("csd-" + i); i++) {
       ByteBuffer buffer = format.getByteBuffer("csd-" + i);
@@ -315,10 +324,12 @@ public final class FrameworkSampleSource implements SampleSource, SampleSourceRe
     }
     long durationUs = format.containsKey(android.media.MediaFormat.KEY_DURATION)
         ? format.getLong(android.media.MediaFormat.KEY_DURATION) : C.UNKNOWN_TIME_US;
-    MediaFormat mediaFormat = new MediaFormat(MediaFormat.NO_VALUE, mimeType, MediaFormat.NO_VALUE,
-        maxInputSize, durationUs, width, height, rotationDegrees, MediaFormat.NO_VALUE,
-        channelCount, sampleRate, language, MediaFormat.OFFSET_SAMPLE_RELATIVE, initializationData,
-        false, MediaFormat.NO_VALUE, MediaFormat.NO_VALUE);
+    int pcmEncoding = MimeTypes.AUDIO_RAW.equals(mimeType) ? C.ENCODING_PCM_16BIT
+        : MediaFormat.NO_VALUE;
+    MediaFormat mediaFormat = new MediaFormat(null, mimeType, MediaFormat.NO_VALUE, maxInputSize,
+        durationUs, width, height, rotationDegrees, MediaFormat.NO_VALUE, channelCount, sampleRate,
+        language, MediaFormat.OFFSET_SAMPLE_RELATIVE, initializationData, false,
+        MediaFormat.NO_VALUE, MediaFormat.NO_VALUE, pcmEncoding, encoderDelay, encoderPadding);
     mediaFormat.setFrameworkFormatV16(format);
     return mediaFormat;
   }

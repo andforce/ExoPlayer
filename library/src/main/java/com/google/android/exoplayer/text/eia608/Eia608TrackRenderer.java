@@ -15,6 +15,10 @@
  */
 package com.google.android.exoplayer.text.eia608;
 
+import android.os.Handler;
+import android.os.Handler.Callback;
+import android.os.Looper;
+import android.os.Message;
 import com.google.android.exoplayer.C;
 import com.google.android.exoplayer.ExoPlaybackException;
 import com.google.android.exoplayer.MediaFormat;
@@ -27,12 +31,6 @@ import com.google.android.exoplayer.text.Cue;
 import com.google.android.exoplayer.text.TextRenderer;
 import com.google.android.exoplayer.util.Assertions;
 import com.google.android.exoplayer.util.Util;
-
-import android.os.Handler;
-import android.os.Handler.Callback;
-import android.os.Looper;
-import android.os.Message;
-
 import java.util.Collections;
 import java.util.TreeSet;
 
@@ -66,6 +64,7 @@ public final class Eia608TrackRenderer extends SampleSourceTrackRenderer impleme
   private int captionRowCount;
   private String caption;
   private String lastRenderedCaption;
+  private ClosedCaptionCtrl repeatableControl;
 
   /**
    * @param source A source from which samples containing EIA-608 closed captions can be read.
@@ -97,17 +96,12 @@ public final class Eia608TrackRenderer extends SampleSourceTrackRenderer impleme
   protected void onEnabled(int track, long positionUs, boolean joining)
       throws ExoPlaybackException {
     super.onEnabled(track, positionUs, joining);
-    seekToInternal();
   }
 
   @Override
-  protected void seekTo(long positionUs) throws ExoPlaybackException {
-    super.seekTo(positionUs);
-    seekToInternal();
-  }
-
-  private void seekToInternal() {
+  protected void onDiscontinuity(long positionUs) {
     inputStreamEnded = false;
+    repeatableControl = null;
     pendingCaptionLists.clear();
     clearPendingSample();
     captionRowCount = DEFAULT_CAPTIONS_ROW_COUNT;
@@ -116,15 +110,15 @@ public final class Eia608TrackRenderer extends SampleSourceTrackRenderer impleme
   }
 
   @Override
-  protected void doSomeWork(long positionUs, long elapsedRealtimeUs) throws ExoPlaybackException {
-    continueBufferingSource(positionUs);
+  protected void doSomeWork(long positionUs, long elapsedRealtimeUs, boolean sourceIsReady)
+      throws ExoPlaybackException {
     if (isSamplePending()) {
       maybeParsePendingSample(positionUs);
     }
 
     int result = inputStreamEnded ? SampleSource.END_OF_STREAM : SampleSource.SAMPLE_READ;
     while (!isSamplePending() && result == SampleSource.SAMPLE_READ) {
-      result = readSource(positionUs, formatHolder, sampleHolder, false);
+      result = readSource(positionUs, formatHolder, sampleHolder);
       if (result == SampleSource.SAMPLE_READ) {
         maybeParsePendingSample(positionUs);
       } else if (result == SampleSource.END_OF_STREAM) {
@@ -212,10 +206,20 @@ public final class Eia608TrackRenderer extends SampleSourceTrackRenderer impleme
       return;
     }
 
+    boolean isRepeatableControl = false;
     for (int i = 0; i < captionBufferSize; i++) {
       ClosedCaption caption = captionList.captions[i];
       if (caption.type == ClosedCaption.TYPE_CTRL) {
         ClosedCaptionCtrl captionCtrl = (ClosedCaptionCtrl) caption;
+        isRepeatableControl = captionBufferSize == 1 && captionCtrl.isRepeatable();
+        if (isRepeatableControl && repeatableControl != null
+            && repeatableControl.cc1 == captionCtrl.cc1
+            && repeatableControl.cc2 == captionCtrl.cc2) {
+          repeatableControl = null;
+          continue;
+        } else if (isRepeatableControl) {
+          repeatableControl = captionCtrl;
+        }
         if (captionCtrl.isMiscCode()) {
           handleMiscCode(captionCtrl);
         } else if (captionCtrl.isPreambleAddressCode()) {
@@ -226,6 +230,9 @@ public final class Eia608TrackRenderer extends SampleSourceTrackRenderer impleme
       }
     }
 
+    if (!isRepeatableControl) {
+      repeatableControl = null;
+    }
     if (captionMode == CC_MODE_ROLL_UP || captionMode == CC_MODE_PAINT_ON) {
       caption = getDisplayCaption();
     }

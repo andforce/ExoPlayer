@@ -15,6 +15,9 @@
  */
 package com.google.android.exoplayer.playbacktests.util;
 
+import android.media.MediaCodec.CryptoException;
+import android.util.Log;
+import android.view.Surface;
 import com.google.android.exoplayer.ExoPlaybackException;
 import com.google.android.exoplayer.ExoPlayer;
 import com.google.android.exoplayer.MediaCodecAudioTrackRenderer;
@@ -25,11 +28,6 @@ import com.google.android.exoplayer.audio.AudioTrack.WriteException;
 import com.google.android.exoplayer.chunk.ChunkSampleSource;
 import com.google.android.exoplayer.chunk.Format;
 import com.google.android.exoplayer.hls.HlsSampleSource;
-
-import android.media.MediaCodec.CryptoException;
-import android.util.Log;
-import android.view.Surface;
-
 import java.io.IOException;
 import java.text.NumberFormat;
 import java.util.Locale;
@@ -102,6 +100,12 @@ public final class LogcatLogger implements ExoPlayer.Listener,
   @Override
   public void onAudioTrackWriteError(WriteException e) {
     Log.e(tag, "Audio track write error", e);
+  }
+
+  @Override
+  public void onAudioTrackUnderrun(int bufferSize, long bufferSizeMs, long elapsedSinceLastFeedMs) {
+    Log.e(tag, "Audio track underrun (" + bufferSize + ", " + bufferSizeMs + ", "
+        + elapsedSinceLastFeedMs + ")");
   }
 
   @Override

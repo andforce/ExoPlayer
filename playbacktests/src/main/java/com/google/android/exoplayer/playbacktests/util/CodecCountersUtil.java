@@ -16,7 +16,6 @@
 package com.google.android.exoplayer.playbacktests.util;
 
 import com.google.android.exoplayer.CodecCounters;
-
 import junit.framework.TestCase;
 
 /**
@@ -75,6 +74,14 @@ public final class CodecCountersUtil {
     int actual = counters.droppedOutputBufferCount;
     TestCase.assertTrue("Codec(" + name + ") was late decoding: " + actual + " buffers. "
         + "Limit: " + limit + ".", actual <= limit);
+  }
+
+  public static void assertConsecutiveDroppedOutputBufferLimit(String name, CodecCounters counters,
+      int limit) {
+    counters.ensureUpdated();
+    int actual = counters.maxConsecutiveDroppedOutputBufferCount;
+    TestCase.assertTrue("Codec(" + name + ") was late decoding: " + actual
+        + " buffers consecutively. " + "Limit: " + limit + ".", actual <= limit);
   }
 
 }

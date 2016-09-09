@@ -17,7 +17,6 @@ package com.google.android.exoplayer.extractor.webm;
 
 import com.google.android.exoplayer.ParserException;
 import com.google.android.exoplayer.extractor.ExtractorInput;
-
 import java.io.IOException;
 
 /**
@@ -35,6 +34,14 @@ import java.io.IOException;
    * @return One of the {@code TYPE_} constants defined in {@link EbmlReader}.
    */
   int getElementType(int id);
+
+  /**
+   * Checks if the given id is that of a level 1 element.
+   *
+   * @param id The element ID.
+   * @return True the given id is that of a level 1 element. false otherwise.
+   */
+  boolean isLevel1Element(int id);
 
   /**
    * Called when the start of a master element is encountered.

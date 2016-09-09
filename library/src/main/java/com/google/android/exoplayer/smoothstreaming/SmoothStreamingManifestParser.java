@@ -15,6 +15,8 @@
  */
 package com.google.android.exoplayer.smoothstreaming;
 
+import android.util.Base64;
+import android.util.Pair;
 import com.google.android.exoplayer.ParserException;
 import com.google.android.exoplayer.extractor.mp4.PsshAtomUtil;
 import com.google.android.exoplayer.smoothstreaming.SmoothStreamingManifest.ProtectionElement;
@@ -24,20 +26,16 @@ import com.google.android.exoplayer.upstream.UriLoadable;
 import com.google.android.exoplayer.util.Assertions;
 import com.google.android.exoplayer.util.CodecSpecificDataUtil;
 import com.google.android.exoplayer.util.MimeTypes;
-
-import android.util.Base64;
-import android.util.Pair;
-
-import org.xmlpull.v1.XmlPullParser;
-import org.xmlpull.v1.XmlPullParserException;
-import org.xmlpull.v1.XmlPullParserFactory;
-
+import com.google.android.exoplayer.util.Util;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.UUID;
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserException;
+import org.xmlpull.v1.XmlPullParserFactory;
 
 /**
  * Parses SmoothStreaming client manifests.
@@ -404,6 +402,7 @@ public class SmoothStreamingManifestParser implements UriLoadable.Parser<SmoothS
       if (TAG_PROTECTION_HEADER.equals(parser.getName())) {
         inProtectionHeader = true;
         String uuidString = parser.getAttributeValue(null, KEY_SYSTEM_ID);
+        uuidString = stripCurlyBraces(uuidString);
         uuid = UUID.fromString(uuidString);
       }
     }
@@ -427,6 +426,12 @@ public class SmoothStreamingManifestParser implements UriLoadable.Parser<SmoothS
       return new ProtectionElement(uuid, PsshAtomUtil.buildPsshAtom(uuid, initData));
     }
 
+    private static String stripCurlyBraces(String uuidString) {
+      if (uuidString.charAt(0) == '{' && uuidString.charAt(uuidString.length() - 1) == '}') {
+        uuidString = uuidString.substring(1, uuidString.length() - 1);
+      }
+      return uuidString;
+    }
   }
 
   private static class StreamElementParser extends ElementParser {
@@ -536,6 +541,7 @@ public class SmoothStreamingManifestParser implements UriLoadable.Parser<SmoothS
       displayWidth = parseInt(parser, KEY_DISPLAY_WIDTH, -1);
       displayHeight = parseInt(parser, KEY_DISPLAY_HEIGHT, -1);
       language = parser.getAttributeValue(null, KEY_LANGUAGE);
+      putNormalizedAttribute(KEY_LANGUAGE, language);
       timescale = parseInt(parser, KEY_TIME_SCALE, -1);
       if (timescale == -1) {
         timescale = (Long) getNormalizedAttribute(KEY_TIME_SCALE);
@@ -588,6 +594,7 @@ public class SmoothStreamingManifestParser implements UriLoadable.Parser<SmoothS
     private static final String KEY_CHANNELS = "Channels";
     private static final String KEY_FOUR_CC = "FourCC";
     private static final String KEY_TYPE = "Type";
+    private static final String KEY_LANGUAGE = "Language";
     private static final String KEY_MAX_WIDTH = "MaxWidth";
     private static final String KEY_MAX_HEIGHT = "MaxHeight";
 
@@ -600,6 +607,7 @@ public class SmoothStreamingManifestParser implements UriLoadable.Parser<SmoothS
     private int maxHeight;
     private int samplingRate;
     private int channels;
+    private String language;
 
     public TrackElementParser(ElementParser parent, String baseUri) {
       super(parent, baseUri, TAG);
@@ -613,6 +621,7 @@ public class SmoothStreamingManifestParser implements UriLoadable.Parser<SmoothS
 
       index = parseInt(parser, KEY_INDEX, -1);
       bitrate = parseRequiredInt(parser, KEY_BITRATE);
+      language = (String) getNormalizedAttribute(KEY_LANGUAGE);
 
       if (type == StreamElement.TYPE_VIDEO) {
         maxHeight = parseRequiredInt(parser, KEY_MAX_HEIGHT);
@@ -637,7 +646,7 @@ public class SmoothStreamingManifestParser implements UriLoadable.Parser<SmoothS
 
       value = parser.getAttributeValue(null, KEY_CODEC_PRIVATE_DATA);
       if (value != null && value.length() > 0) {
-        byte[] codecPrivateData = hexStringToByteArray(value);
+        byte[] codecPrivateData = Util.getBytesFromHexString(value);
         byte[][] split = CodecSpecificDataUtil.splitNalUnits(codecPrivateData);
         if (split == null) {
           csd.add(codecPrivateData);
@@ -657,7 +666,7 @@ public class SmoothStreamingManifestParser implements UriLoadable.Parser<SmoothS
         csd.toArray(csdArray);
       }
       return new TrackElement(index, bitrate, mimeType, csdArray, maxWidth, maxHeight, samplingRate,
-          channels);
+          channels, language);
     }
 
     private static String fourCCToMimeType(String fourCC) {
@@ -669,19 +678,20 @@ public class SmoothStreamingManifestParser implements UriLoadable.Parser<SmoothS
         return MimeTypes.AUDIO_AAC;
       } else if (fourCC.equalsIgnoreCase("TTML")) {
         return MimeTypes.APPLICATION_TTML;
+      } else if (fourCC.equalsIgnoreCase("ac-3") || fourCC.equalsIgnoreCase("dac3")) {
+        return MimeTypes.AUDIO_AC3;
+      } else if (fourCC.equalsIgnoreCase("ec-3") || fourCC.equalsIgnoreCase("dec3")) {
+        return MimeTypes.AUDIO_E_AC3;
+      } else if (fourCC.equalsIgnoreCase("dtsc")) {
+        return MimeTypes.AUDIO_DTS;
+      } else if (fourCC.equalsIgnoreCase("dtsh") || fourCC.equalsIgnoreCase("dtsl")) {
+        return MimeTypes.AUDIO_DTS_HD;
+      } else if (fourCC.equalsIgnoreCase("dtse")) {
+        return MimeTypes.AUDIO_DTS_EXPRESS;
+      } else if (fourCC.equalsIgnoreCase("opus")) {
+        return MimeTypes.AUDIO_OPUS;
       }
       return null;
-    }
-
-    private static byte[] hexStringToByteArray(String hexString) {
-      int length = hexString.length();
-      byte[] data = new byte[length / 2];
-      for (int i = 0; i < data.length; i++) {
-        int stringOffset = i * 2;
-        data[i] = (byte) ((Character.digit(hexString.charAt(stringOffset), 16) << 4)
-            + Character.digit(hexString.charAt(stringOffset + 1), 16));
-      }
-      return data;
     }
 
   }

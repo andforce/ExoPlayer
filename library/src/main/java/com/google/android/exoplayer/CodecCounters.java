@@ -26,11 +26,13 @@ public final class CodecCounters {
 
   public int codecInitCount;
   public int codecReleaseCount;
+  public int inputBufferCount;
   public int outputFormatChangedCount;
   public int outputBuffersChangedCount;
   public int renderedOutputBufferCount;
   public int skippedOutputBufferCount;
   public int droppedOutputBufferCount;
+  public int maxConsecutiveDroppedOutputBufferCount;
 
   /**
    * Should be invoked from the playback thread after the counters have been updated. Should also
@@ -47,11 +49,13 @@ public final class CodecCounters {
     StringBuilder builder = new StringBuilder();
     builder.append("cic:").append(codecInitCount);
     builder.append(" crc:").append(codecReleaseCount);
+    builder.append(" ibc:").append(inputBufferCount);
     builder.append(" ofc:").append(outputFormatChangedCount);
     builder.append(" obc:").append(outputBuffersChangedCount);
     builder.append(" ren:").append(renderedOutputBufferCount);
     builder.append(" sob:").append(skippedOutputBufferCount);
     builder.append(" dob:").append(droppedOutputBufferCount);
+    builder.append(" mcdob:").append(maxConsecutiveDroppedOutputBufferCount);
     return builder.toString();
   }
 

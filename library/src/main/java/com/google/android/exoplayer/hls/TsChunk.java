@@ -23,13 +23,17 @@ import com.google.android.exoplayer.extractor.ExtractorInput;
 import com.google.android.exoplayer.upstream.DataSource;
 import com.google.android.exoplayer.upstream.DataSpec;
 import com.google.android.exoplayer.util.Util;
-
 import java.io.IOException;
 
 /**
  * An MPEG2TS chunk.
  */
 public final class TsChunk extends MediaChunk {
+
+  /**
+   * The discontinuity sequence number of the chunk.
+   */
+  public final int discontinuitySequenceNumber;
 
   /**
    * The wrapped extractor into which this chunk is being consumed.
@@ -39,6 +43,7 @@ public final class TsChunk extends MediaChunk {
   private final boolean isEncrypted;
 
   private int bytesLoaded;
+  private long adjustedEndTimeUs;
   private volatile boolean loadCanceled;
 
   /**
@@ -48,19 +53,22 @@ public final class TsChunk extends MediaChunk {
    * @param format The format of the stream to which this chunk belongs.
    * @param startTimeUs The start time of the media contained by the chunk, in microseconds.
    * @param endTimeUs The end time of the media contained by the chunk, in microseconds.
+   * @param discontinuitySequenceNumber The discontinuity sequence number of the chunk.
    * @param chunkIndex The index of the chunk.
    * @param extractorWrapper A wrapped extractor to parse samples from the data.
    * @param encryptionKey For AES encryption chunks, the encryption key.
    * @param encryptionIv For AES encryption chunks, the encryption initialization vector.
    */
   public TsChunk(DataSource dataSource, DataSpec dataSpec, int trigger, Format format,
-      long startTimeUs, long endTimeUs, int chunkIndex, HlsExtractorWrapper extractorWrapper,
-      byte[] encryptionKey, byte[] encryptionIv) {
+      long startTimeUs, long endTimeUs, int chunkIndex, int discontinuitySequenceNumber,
+      HlsExtractorWrapper extractorWrapper, byte[] encryptionKey, byte[] encryptionIv) {
     super(buildDataSource(dataSource, encryptionKey, encryptionIv), dataSpec, trigger, format,
         startTimeUs, endTimeUs, chunkIndex);
+    this.discontinuitySequenceNumber = discontinuitySequenceNumber;
     this.extractorWrapper = extractorWrapper;
     // Note: this.dataSource and dataSource may be different.
     this.isEncrypted = this.dataSource instanceof Aes128DataSource;
+    adjustedEndTimeUs = startTimeUs;
   }
 
   @Override
@@ -107,12 +115,20 @@ public final class TsChunk extends MediaChunk {
         while (result == Extractor.RESULT_CONTINUE && !loadCanceled) {
           result = extractorWrapper.read(input);
         }
+        long tsChunkEndTimeUs = extractorWrapper.getAdjustedEndTimeUs();
+        if (tsChunkEndTimeUs != Long.MIN_VALUE) {
+          adjustedEndTimeUs = tsChunkEndTimeUs;
+        }
       } finally {
         bytesLoaded = (int) (input.getPosition() - dataSpec.absoluteStreamPosition);
       }
     } finally {
       dataSource.close();
     }
+  }
+
+  public long getAdjustedEndTimeUs() {
+    return adjustedEndTimeUs;
   }
 
   // Private methods

@@ -15,42 +15,45 @@
  */
 package com.google.android.exoplayer.audio;
 
-import com.google.android.exoplayer.C;
-import com.google.android.exoplayer.util.Ac3Util;
-import com.google.android.exoplayer.util.Assertions;
-import com.google.android.exoplayer.util.MimeTypes;
-import com.google.android.exoplayer.util.Util;
-
 import android.annotation.TargetApi;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTimestamp;
-import android.media.MediaFormat;
+import android.media.PlaybackParams;
 import android.os.ConditionVariable;
 import android.os.SystemClock;
 import android.util.Log;
-
+import com.google.android.exoplayer.C;
+import com.google.android.exoplayer.util.Ac3Util;
+import com.google.android.exoplayer.util.Assertions;
+import com.google.android.exoplayer.util.DtsUtil;
+import com.google.android.exoplayer.util.MimeTypes;
+import com.google.android.exoplayer.util.Util;
 import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 
 /**
  * Plays audio data. The implementation delegates to an {@link android.media.AudioTrack} and handles
  * playback position smoothing, non-blocking writes and reconfiguration.
- *
- * <p>If {@link #isInitialized} returns {@code false}, the instance can be {@link #initialize}d.
- * After initialization, start playback by calling {@link #play}.
- *
- * <p>Call {@link #handleBuffer} to write data for playback.
- *
- * <p>Call {@link #handleDiscontinuity} when a buffer is skipped.
- *
- * <p>Call {@link #reconfigure} when the output format changes.
- *
- * <p>Call {@link #reset} to free resources. It is safe to re-{@link #initialize} the instance.
- *
- * <p>Call {@link #release} when the instance will no longer be used.
+ * <p>
+ * Before starting playback, specify the input audio format by calling one of the {@link #configure}
+ * methods and {@link #initialize} the instance, optionally specifying an audio session.
+ * <p>
+ * Call {@link #handleBuffer(ByteBuffer, int, int, long)} to write data to play back, and
+ * {@link #handleDiscontinuity()} when a buffer is skipped. Call {@link #play()} to start playing
+ * back written data.
+ * <p>
+ * Call {@link #configure} again whenever the input format changes. If {@link #isInitialized()}
+ * returns false after calling {@link #configure}, it is necessary to re-{@link #initialize} the
+ * instance before writing more data.
+ * <p>
+ * The underlying framework audio track is created by {@link #initialize} and released
+ * asynchronously by {@link #reset} (and {@link #configure}, unless the format is unchanged).
+ * Reinitialization blocks until releasing the old audio track completes. It is safe to
+ * re-{@link #initialize} the instance after calling {@link #reset()}, without reconfiguration.
+ * <p>
+ * Call {@link #release()} when the instance will no longer be used.
  */
-@TargetApi(16)
 public final class AudioTrack {
 
   /**
@@ -58,7 +61,9 @@ public final class AudioTrack {
    */
   public static final class InitializationException extends Exception {
 
-    /** The state as reported by {@link android.media.AudioTrack#getState()}. */
+    /**
+     * The state as reported by {@link android.media.AudioTrack#getState()}.
+     */
     public final int audioTrackState;
 
     public InitializationException(
@@ -75,7 +80,9 @@ public final class AudioTrack {
    */
   public static final class WriteException extends Exception {
 
-    /** The value returned from {@link android.media.AudioTrack#write(byte[], int, int)}. */
+    /**
+     * The value returned from {@link android.media.AudioTrack#write(byte[], int, int)}.
+     */
     public final int errorCode;
 
     public WriteException(int errorCode) {
@@ -97,21 +104,37 @@ public final class AudioTrack {
 
   }
 
-  /** Returned in the result of {@link #handleBuffer} if the buffer was discontinuous. */
+  /**
+   * Returned in the result of {@link #handleBuffer} if the buffer was discontinuous.
+   */
   public static final int RESULT_POSITION_DISCONTINUITY = 1;
-  /** Returned in the result of {@link #handleBuffer} if the buffer can be released. */
+  /**
+   * Returned in the result of {@link #handleBuffer} if the buffer can be released.
+   */
   public static final int RESULT_BUFFER_CONSUMED = 2;
 
-  /** Represents an unset {@link android.media.AudioTrack} session identifier. */
+  /**
+   * Represents an unset {@link android.media.AudioTrack} session identifier.
+   */
   public static final int SESSION_ID_NOT_SET = 0;
 
-  /** Returned by {@link #getCurrentPositionUs} when the position is not set. */
+  /**
+   * Returned by {@link #getCurrentPositionUs} when the position is not set.
+   */
   public static final long CURRENT_POSITION_NOT_SET = Long.MIN_VALUE;
 
-  /** A minimum length for the {@link android.media.AudioTrack} buffer, in microseconds. */
+  /**
+   * A minimum length for the {@link android.media.AudioTrack} buffer, in microseconds.
+   */
   private static final long MIN_BUFFER_DURATION_US = 250000;
-  /** A maximum length for the {@link android.media.AudioTrack} buffer, in microseconds. */
+  /**
+   * A maximum length for the {@link android.media.AudioTrack} buffer, in microseconds.
+   */
   private static final long MAX_BUFFER_DURATION_US = 750000;
+  /**
+   * The length for passthrough {@link android.media.AudioTrack} buffers, in microseconds.
+   */
+  private static final long PASSTHROUGH_BUFFER_DURATION_US = 250000;
   /**
    * A multiplication factor to apply to the minimum buffer size requested by the underlying
    * {@link android.media.AudioTrack}.
@@ -135,11 +158,6 @@ public final class AudioTrack {
    */
   private static final long MAX_LATENCY_US = 5 * C.MICROS_PER_SECOND;
 
-  /**
-   * Value for {@link #passthroughBitrate} before the bitrate has been calculated.
-   */
-  private static final int UNKNOWN_BITRATE = 0;
-
   private static final int START_NOT_SET = 0;
   private static final int START_IN_SYNC = 1;
   private static final int START_NEED_SYNC = 2;
@@ -150,7 +168,7 @@ public final class AudioTrack {
 
   /**
    * Whether to enable a workaround for an issue where an audio effect does not keep its session
-   * active across releasing/initializing a new audio track, on platform API version < 21.
+   * active across releasing/initializing a new audio track, on platform API version before 21.
    * <p>
    * The flag must be set before creating a player.
    */
@@ -171,16 +189,20 @@ public final class AudioTrack {
   private final long[] playheadOffsets;
   private final AudioTrackUtil audioTrackUtil;
 
-  /** Used to keep the audio session active on pre-V21 builds (see {@link #initialize()}). */
+  /**
+   * Used to keep the audio session active on pre-V21 builds (see {@link #initialize()}).
+   */
   private android.media.AudioTrack keepSessionIdAudioTrack;
 
   private android.media.AudioTrack audioTrack;
   private int sampleRate;
   private int channelConfig;
-  private int encoding;
-  private int frameSize;
-  private int minBufferSize;
+  private int sourceEncoding;
+  private int targetEncoding;
+  private boolean passthrough;
+  private int pcmFrameSize;
   private int bufferSize;
+  private long bufferSizeUs;
 
   private int nextPlayheadOffsetIndex;
   private int playheadOffsetCount;
@@ -190,7 +212,9 @@ public final class AudioTrack {
   private long lastTimestampSampleTimeUs;
 
   private Method getLatencyMethod;
-  private long submittedBytes;
+  private long submittedPcmBytes;
+  private long submittedEncodedFrames;
+  private int framesPerEncodedSample;
   private int startMediaTimeState;
   private long startMediaTimeUs;
   private long resumeSystemTimeUs;
@@ -199,12 +223,10 @@ public final class AudioTrack {
 
   private byte[] temporaryBuffer;
   private int temporaryBufferOffset;
-  private int temporaryBufferSize;
+  private int bufferBytesRemaining;
 
-  /**
-   * Bitrate measured in kilobits per second, if {@link #isPassthrough()} returns true.
-   */
-  private int passthroughBitrate;
+  private ByteBuffer resampledBuffer;
+  private boolean useResampledBuffer;
 
   /**
    * Creates an audio track with default audio capabilities (no encoded audio passthrough support).
@@ -231,7 +253,9 @@ public final class AudioTrack {
         // There's no guarantee this method exists. Do nothing.
       }
     }
-    if (Util.SDK_INT >= 19) {
+    if (Util.SDK_INT >= 23) {
+      audioTrackUtil = new AudioTrackUtilV23();
+    } else if (Util.SDK_INT >= 19) {
       audioTrackUtil = new AudioTrackUtilV19();
     } else {
       audioTrackUtil = new AudioTrackUtil();
@@ -283,7 +307,10 @@ public final class AudioTrack {
     if (audioTimestampSet) {
       // How long ago in the past the audio timestamp is (negative if it's in the future).
       long presentationDiff = systemClockUs - (audioTrackUtil.getTimestampNanoTime() / 1000);
-      long framesDiff = durationUsToFrames(presentationDiff);
+      // Fixes such difference if the playback speed is not real time speed.
+      long actualSpeedPresentationDiff = (long) (presentationDiff
+          * audioTrackUtil.getPlaybackSpeed());
+      long framesDiff = durationUsToFrames(actualSpeedPresentationDiff);
       // The position of the frame that's currently being presented.
       long currentFramePosition = audioTrackUtil.getTimestampFramePosition() + framesDiff;
       currentPositionUs = framesToDurationUs(currentFramePosition) + startMediaTimeUs;
@@ -303,6 +330,118 @@ public final class AudioTrack {
     }
 
     return currentPositionUs;
+  }
+
+  /**
+   * Configures (or reconfigures) the audio track, inferring a suitable buffer size automatically.
+   *
+   * @param mimeType The mime type.
+   * @param channelCount The number of channels.
+   * @param sampleRate The sample rate in Hz.
+   * @param pcmEncoding For PCM formats, the encoding used. One of {@link C#ENCODING_PCM_16BIT},
+   *     {@link C#ENCODING_PCM_16BIT}, {@link C#ENCODING_PCM_24BIT} and
+   *     {@link C#ENCODING_PCM_32BIT}.
+   */
+  public void configure(String mimeType, int channelCount, int sampleRate, int pcmEncoding) {
+    configure(mimeType, channelCount, sampleRate, pcmEncoding, 0);
+  }
+
+  /**
+   * Configures (or reconfigures) the audio track.
+   *
+   * @param mimeType The mime type.
+   * @param channelCount The number of channels.
+   * @param sampleRate The sample rate in Hz.
+   * @param pcmEncoding For PCM formats, the encoding used. One of {@link C#ENCODING_PCM_16BIT},
+   *     {@link C#ENCODING_PCM_16BIT}, {@link C#ENCODING_PCM_24BIT} and
+   *     {@link C#ENCODING_PCM_32BIT}.
+   * @param specifiedBufferSize A specific size for the playback buffer in bytes, or 0 to infer a
+   *     suitable buffer size automatically.
+   */
+  public void configure(String mimeType, int channelCount, int sampleRate, int pcmEncoding,
+      int specifiedBufferSize) {
+    int channelConfig;
+    switch (channelCount) {
+      case 1:
+        channelConfig = AudioFormat.CHANNEL_OUT_MONO;
+        break;
+      case 2:
+        channelConfig = AudioFormat.CHANNEL_OUT_STEREO;
+        break;
+      case 3:
+        channelConfig = AudioFormat.CHANNEL_OUT_STEREO | AudioFormat.CHANNEL_OUT_FRONT_CENTER;
+        break;
+      case 4:
+        channelConfig = AudioFormat.CHANNEL_OUT_QUAD;
+        break;
+      case 5:
+        channelConfig = AudioFormat.CHANNEL_OUT_QUAD | AudioFormat.CHANNEL_OUT_FRONT_CENTER;
+        break;
+      case 6:
+        channelConfig = AudioFormat.CHANNEL_OUT_5POINT1;
+        break;
+      case 7:
+        channelConfig = AudioFormat.CHANNEL_OUT_5POINT1 | AudioFormat.CHANNEL_OUT_BACK_CENTER;
+        break;
+      case 8:
+        channelConfig = C.CHANNEL_OUT_7POINT1_SURROUND;
+        break;
+      default:
+        throw new IllegalArgumentException("Unsupported channel count: " + channelCount);
+    }
+
+    boolean passthrough = !MimeTypes.AUDIO_RAW.equals(mimeType);
+    int sourceEncoding;
+    if (passthrough) {
+      sourceEncoding = getEncodingForMimeType(mimeType);
+    } else if (pcmEncoding == C.ENCODING_PCM_8BIT || pcmEncoding == C.ENCODING_PCM_16BIT
+        || pcmEncoding == C.ENCODING_PCM_24BIT || pcmEncoding == C.ENCODING_PCM_32BIT) {
+      sourceEncoding = pcmEncoding;
+    } else {
+      throw new IllegalArgumentException("Unsupported PCM encoding: " + pcmEncoding);
+    }
+
+    if (isInitialized() && this.sourceEncoding == sourceEncoding && this.sampleRate == sampleRate
+        && this.channelConfig == channelConfig) {
+      // We already have an audio track with the correct sample rate, channel config and encoding.
+      return;
+    }
+
+    reset();
+
+    this.sourceEncoding = sourceEncoding;
+    this.passthrough = passthrough;
+    this.sampleRate = sampleRate;
+    this.channelConfig = channelConfig;
+    targetEncoding = passthrough ? sourceEncoding : C.ENCODING_PCM_16BIT;
+    pcmFrameSize = 2 * channelCount; // 2 bytes per 16-bit sample * number of channels.
+
+    if (specifiedBufferSize != 0) {
+      bufferSize = specifiedBufferSize;
+    } else if (passthrough) {
+      // TODO: Set the minimum buffer size using getMinBufferSize when it takes the encoding into
+      // account. [Internal: b/25181305]
+      if (targetEncoding == C.ENCODING_AC3 || targetEncoding == C.ENCODING_E_AC3) {
+        // AC-3 allows bitrates up to 640 kbit/s.
+        bufferSize = (int) (PASSTHROUGH_BUFFER_DURATION_US * 80 * 1024 / C.MICROS_PER_SECOND);
+      } else /* (targetEncoding == C.ENCODING_DTS || targetEncoding == C.ENCODING_DTS_HD) */ {
+        // DTS allows an 'open' bitrate, but we assume the maximum listed value: 1536 kbit/s.
+        bufferSize = (int) (PASSTHROUGH_BUFFER_DURATION_US * 192 * 1024 / C.MICROS_PER_SECOND);
+      }
+    } else {
+      int minBufferSize =
+          android.media.AudioTrack.getMinBufferSize(sampleRate, channelConfig, targetEncoding);
+      Assertions.checkState(minBufferSize != android.media.AudioTrack.ERROR_BAD_VALUE);
+      int multipliedBufferSize = minBufferSize * BUFFER_MULTIPLICATION_FACTOR;
+      int minAppBufferSize = (int) durationUsToFrames(MIN_BUFFER_DURATION_US) * pcmFrameSize;
+      int maxAppBufferSize = (int) Math.max(minBufferSize,
+          durationUsToFrames(MAX_BUFFER_DURATION_US) * pcmFrameSize);
+      bufferSize = multipliedBufferSize < minAppBufferSize ? minAppBufferSize
+          : multipliedBufferSize > maxAppBufferSize ? maxAppBufferSize
+          : multipliedBufferSize;
+    }
+    bufferSizeUs = passthrough ? C.UNKNOWN_TIME_US
+        : framesToDurationUs(pcmBytesToFrames(bufferSize));
   }
 
   /**
@@ -330,12 +469,12 @@ public final class AudioTrack {
     releasingConditionVariable.block();
 
     if (sessionId == SESSION_ID_NOT_SET) {
-      audioTrack = new android.media.AudioTrack(streamType, sampleRate, channelConfig, encoding,
-          bufferSize, android.media.AudioTrack.MODE_STREAM);
+      audioTrack = new android.media.AudioTrack(streamType, sampleRate, channelConfig,
+          targetEncoding, bufferSize, android.media.AudioTrack.MODE_STREAM);
     } else {
       // Re-attach to the same audio session.
-      audioTrack = new android.media.AudioTrack(streamType, sampleRate, channelConfig, encoding,
-          bufferSize, android.media.AudioTrack.MODE_STREAM, sessionId);
+      audioTrack = new android.media.AudioTrack(streamType, sampleRate, channelConfig,
+          targetEncoding, bufferSize, android.media.AudioTrack.MODE_STREAM, sessionId);
     }
     checkAudioTrackInitialized();
 
@@ -351,7 +490,7 @@ public final class AudioTrack {
         if (keepSessionIdAudioTrack == null) {
           int sampleRate = 4000; // Equal to private android.media.AudioTrack.MIN_SAMPLE_RATE.
           int channelConfig = AudioFormat.CHANNEL_OUT_MONO;
-          int encoding = AudioFormat.ENCODING_PCM_16BIT;
+          int encoding = C.ENCODING_PCM_16BIT;
           int bufferSize = 2; // Use a two byte buffer, as it is not actually used for playback.
           keepSessionIdAudioTrack = new android.media.AudioTrack(streamType, sampleRate,
               channelConfig, encoding, bufferSize, android.media.AudioTrack.MODE_STATIC, sessionId);
@@ -359,83 +498,41 @@ public final class AudioTrack {
       }
     }
 
-    audioTrackUtil.reconfigure(audioTrack, isPassthrough());
+    audioTrackUtil.reconfigure(audioTrack, needsPassthroughWorkarounds());
     setAudioTrackVolume();
 
     return sessionId;
   }
 
   /**
-   * Reconfigures the audio track to play back media in {@code format}, inferring a buffer size from
-   * the format.
+   * Returns the size of this {@link AudioTrack}'s buffer in bytes.
+   * <p>
+   * The value returned from this method may change as a result of calling one of the
+   * {@link #configure} methods.
    *
-   * @param format Specifies the channel count and sample rate to play back.
-   * @param passthrough Whether to play back using a passthrough encoding.
+   * @return The size of the buffer in bytes.
    */
-  public void reconfigure(MediaFormat format, boolean passthrough) {
-    reconfigure(format, passthrough, 0);
+  public int getBufferSize() {
+    return bufferSize;
   }
 
   /**
-   * Reconfigures the audio track to play back media in {@code format}.
+   * Returns the size of the buffer in microseconds for PCM {@link AudioTrack}s, or
+   * {@link C#UNKNOWN_TIME_US} for passthrough {@link AudioTrack}s.
+   * <p>
+   * The value returned from this method may change as a result of calling one of the
+   * {@link #configure} methods.
    *
-   * @param format Specifies the channel count and sample rate to play back.
-   * @param passthrough Whether to playback using a passthrough encoding.
-   * @param specifiedBufferSize A specific size for the playback buffer in bytes, or 0 to use a
-   *     size inferred from the format.
+   * @return The size of the buffer in microseconds for PCM {@link AudioTrack}s, or
+   *     {@link C#UNKNOWN_TIME_US} for passthrough {@link AudioTrack}s.
    */
-  public void reconfigure(MediaFormat format, boolean passthrough, int specifiedBufferSize) {
-    int channelCount = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT);
-    int channelConfig;
-    switch (channelCount) {
-      case 1:
-        channelConfig = AudioFormat.CHANNEL_OUT_MONO;
-        break;
-      case 2:
-        channelConfig = AudioFormat.CHANNEL_OUT_STEREO;
-        break;
-      case 6:
-        channelConfig = AudioFormat.CHANNEL_OUT_5POINT1;
-        break;
-      case 8:
-        channelConfig = AudioFormat.CHANNEL_OUT_7POINT1;
-        break;
-      default:
-        throw new IllegalArgumentException("Unsupported channel count: " + channelCount);
-    }
-    int sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE);
-    String mimeType = format.getString(MediaFormat.KEY_MIME);
-    int encoding = passthrough ? getEncodingForMimeType(mimeType) : AudioFormat.ENCODING_PCM_16BIT;
-    if (isInitialized() && this.sampleRate == sampleRate && this.channelConfig == channelConfig
-        && this.encoding == encoding) {
-      // We already have an audio track with the correct sample rate, encoding and channel config.
-      return;
-    }
-
-    reset();
-
-    this.encoding = encoding;
-    this.sampleRate = sampleRate;
-    this.channelConfig = channelConfig;
-    passthroughBitrate = UNKNOWN_BITRATE;
-    frameSize = 2 * channelCount; // 2 bytes per 16 bit sample * number of channels.
-    minBufferSize = android.media.AudioTrack.getMinBufferSize(sampleRate, channelConfig, encoding);
-    Assertions.checkState(minBufferSize != android.media.AudioTrack.ERROR_BAD_VALUE);
-
-    if (specifiedBufferSize != 0) {
-      bufferSize = specifiedBufferSize;
-    } else {
-      int multipliedBufferSize = minBufferSize * BUFFER_MULTIPLICATION_FACTOR;
-      int minAppBufferSize = (int) durationUsToFrames(MIN_BUFFER_DURATION_US) * frameSize;
-      int maxAppBufferSize = (int) Math.max(minBufferSize,
-          durationUsToFrames(MAX_BUFFER_DURATION_US) * frameSize);
-      bufferSize = multipliedBufferSize < minAppBufferSize ? minAppBufferSize
-          : multipliedBufferSize > maxAppBufferSize ? maxAppBufferSize
-          : multipliedBufferSize;
-    }
+  public long getBufferSizeUs() {
+    return bufferSizeUs;
   }
 
-  /** Starts/resumes playing audio if the audio track has been initialized. */
+  /**
+   * Starts or resumes playing audio if the audio track has been initialized.
+   */
   public void play() {
     if (isInitialized()) {
       resumeSystemTimeUs = System.nanoTime() / 1000;
@@ -443,7 +540,9 @@ public final class AudioTrack {
     }
   }
 
-  /** Signals to the audio track that the next buffer is discontinuous with the previous buffer. */
+  /**
+   * Signals to the audio track that the next buffer is discontinuous with the previous buffer.
+   */
   public void handleDiscontinuity() {
     // Force resynchronization after a skipped buffer.
     if (startMediaTimeState == START_IN_SYNC) {
@@ -468,12 +567,7 @@ public final class AudioTrack {
    */
   public int handleBuffer(ByteBuffer buffer, int offset, int size, long presentationTimeUs)
       throws WriteException {
-    if (size == 0) {
-      return RESULT_BUFFER_CONSUMED;
-    }
-
-    // Workarounds for issues with AC-3 passthrough AudioTracks on API versions 21/22:
-    if (Util.SDK_INT <= 22 && isPassthrough()) {
+    if (needsPassthroughWorkarounds()) {
       // An AC-3 audio track continues to play data written while it is paused. Stop writing so its
       // buffer empties. See [Internal: b/18899620].
       if (audioTrack.getPlayState() == android.media.AudioTrack.PLAYSTATE_PAUSED) {
@@ -490,40 +584,50 @@ public final class AudioTrack {
     }
 
     int result = 0;
-    if (temporaryBufferSize == 0) {
-      if (isPassthrough() && passthroughBitrate == UNKNOWN_BITRATE) {
-        passthroughBitrate = Ac3Util.getBitrate(size, sampleRate);
+    if (bufferBytesRemaining == 0) {
+      // The previous buffer (if there was one) was fully written to the audio track. We're now
+      // seeing a new buffer for the first time.
+      if (size == 0) {
+        return RESULT_BUFFER_CONSUMED;
       }
 
-      // This is the first time we've seen this {@code buffer}.
-      // Note: presentationTimeUs corresponds to the end of the sample, not the start.
-      long bufferStartTime = presentationTimeUs - framesToDurationUs(bytesToFrames(size));
+      useResampledBuffer = targetEncoding != sourceEncoding;
+      if (useResampledBuffer) {
+        Assertions.checkState(targetEncoding == C.ENCODING_PCM_16BIT);
+        // Resample the buffer to get the data in the target encoding.
+        resampledBuffer = resampleTo16BitPcm(buffer, offset, size, sourceEncoding, resampledBuffer);
+        // Use the resampled buffer, offset and size.
+        buffer = resampledBuffer;
+        offset = resampledBuffer.position();
+        size = resampledBuffer.limit();
+      }
+
+      bufferBytesRemaining = size;
+      buffer.position(offset);
+      if (passthrough && framesPerEncodedSample == 0) {
+        // If this is the first encoded sample, calculate the sample size in frames.
+        framesPerEncodedSample = getFramesPerEncodedSample(targetEncoding, buffer);
+      }
       if (startMediaTimeState == START_NOT_SET) {
-        startMediaTimeUs = Math.max(0, bufferStartTime);
+        startMediaTimeUs = Math.max(0, presentationTimeUs);
         startMediaTimeState = START_IN_SYNC;
       } else {
         // Sanity check that bufferStartTime is consistent with the expected value.
-        long expectedBufferStartTime = startMediaTimeUs
-            + framesToDurationUs(bytesToFrames(submittedBytes));
+        long expectedBufferStartTime = startMediaTimeUs + framesToDurationUs(getSubmittedFrames());
         if (startMediaTimeState == START_IN_SYNC
-            && Math.abs(expectedBufferStartTime - bufferStartTime) > 200000) {
+            && Math.abs(expectedBufferStartTime - presentationTimeUs) > 200000) {
           Log.e(TAG, "Discontinuity detected [expected " + expectedBufferStartTime + ", got "
-              + bufferStartTime + "]");
+              + presentationTimeUs + "]");
           startMediaTimeState = START_NEED_SYNC;
         }
         if (startMediaTimeState == START_NEED_SYNC) {
           // Adjust startMediaTimeUs to be consistent with the current buffer's start time and the
           // number of bytes submitted.
-          startMediaTimeUs += (bufferStartTime - expectedBufferStartTime);
+          startMediaTimeUs += (presentationTimeUs - expectedBufferStartTime);
           startMediaTimeState = START_IN_SYNC;
           result |= RESULT_POSITION_DISCONTINUITY;
         }
       }
-    }
-
-    if (temporaryBufferSize == 0) {
-      temporaryBufferSize = size;
-      buffer.position(offset);
       if (Util.SDK_INT < 21) {
         // Copy {@code buffer} into {@code temporaryBuffer}.
         if (temporaryBuffer == null || temporaryBuffer.length < size) {
@@ -535,29 +639,35 @@ public final class AudioTrack {
     }
 
     int bytesWritten = 0;
-    if (Util.SDK_INT < 21) {
+    if (Util.SDK_INT < 21) { // passthrough == false
       // Work out how many bytes we can write without the risk of blocking.
       int bytesPending =
-          (int) (submittedBytes - (audioTrackUtil.getPlaybackHeadPosition() * frameSize));
+          (int) (submittedPcmBytes - (audioTrackUtil.getPlaybackHeadPosition() * pcmFrameSize));
       int bytesToWrite = bufferSize - bytesPending;
       if (bytesToWrite > 0) {
-        bytesToWrite = Math.min(temporaryBufferSize, bytesToWrite);
+        bytesToWrite = Math.min(bufferBytesRemaining, bytesToWrite);
         bytesWritten = audioTrack.write(temporaryBuffer, temporaryBufferOffset, bytesToWrite);
         if (bytesWritten >= 0) {
           temporaryBufferOffset += bytesWritten;
         }
       }
     } else {
-      bytesWritten = writeNonBlockingV21(audioTrack, buffer, temporaryBufferSize);
+      ByteBuffer data = useResampledBuffer ? resampledBuffer : buffer;
+      bytesWritten = writeNonBlockingV21(audioTrack, data, bufferBytesRemaining);
     }
 
     if (bytesWritten < 0) {
       throw new WriteException(bytesWritten);
     }
 
-    temporaryBufferSize -= bytesWritten;
-    submittedBytes += bytesWritten;
-    if (temporaryBufferSize == 0) {
+    bufferBytesRemaining -= bytesWritten;
+    if (!passthrough) {
+      submittedPcmBytes += bytesWritten;
+    }
+    if (bufferBytesRemaining == 0) {
+      if (passthrough) {
+        submittedEncodedFrames += framesPerEncodedSample;
+      }
       result |= RESULT_BUFFER_CONSUMED;
     }
     return result;
@@ -569,24 +679,32 @@ public final class AudioTrack {
    */
   public void handleEndOfStream() {
     if (isInitialized()) {
-      audioTrackUtil.handleEndOfStream(bytesToFrames(submittedBytes));
+      audioTrackUtil.handleEndOfStream(getSubmittedFrames());
     }
   }
 
-  @TargetApi(21)
-  private static int writeNonBlockingV21(
-      android.media.AudioTrack audioTrack, ByteBuffer buffer, int size) {
-    return audioTrack.write(buffer, size, android.media.AudioTrack.WRITE_NON_BLOCKING);
-  }
-
-  /** Returns whether the audio track has more data pending that will be played back. */
+  /**
+   * Returns whether the audio track has more data pending that will be played back.
+   */
   public boolean hasPendingData() {
     return isInitialized()
-        && (bytesToFrames(submittedBytes) > audioTrackUtil.getPlaybackHeadPosition()
-            || audioTrackUtil.overrideHasPendingData());
+        && (getSubmittedFrames() > audioTrackUtil.getPlaybackHeadPosition()
+        || overrideHasPendingData());
   }
 
-  /** Sets the playback volume. */
+  /**
+   * Sets the playback parameters. Only available for SDK_INT >= 23
+   *
+   * @throws UnsupportedOperationException if the Playback Parameters are not supported. That is,
+   *     SDK_INT < 23.
+   */
+  public void setPlaybackParams(PlaybackParams playbackParams) {
+    audioTrackUtil.setPlaybackParameters(playbackParams);
+  }
+
+  /**
+   * Sets the playback volume.
+   */
   public void setVolume(float volume) {
     if (this.volume != volume) {
       this.volume = volume;
@@ -604,17 +722,9 @@ public final class AudioTrack {
     }
   }
 
-  @TargetApi(21)
-  private static void setAudioTrackVolumeV21(android.media.AudioTrack audioTrack, float volume) {
-    audioTrack.setVolume(volume);
-  }
-
-  @SuppressWarnings("deprecation")
-  private static void setAudioTrackVolumeV3(android.media.AudioTrack audioTrack, float volume) {
-    audioTrack.setStereoVolume(volume, volume);
-  }
-
-  /** Pauses playback. */
+  /**
+   * Pauses playback.
+   */
   public void pause() {
     if (isInitialized()) {
       resetSyncParams();
@@ -629,8 +739,10 @@ public final class AudioTrack {
    */
   public void reset() {
     if (isInitialized()) {
-      submittedBytes = 0;
-      temporaryBufferSize = 0;
+      submittedPcmBytes = 0;
+      submittedEncodedFrames = 0;
+      framesPerEncodedSample = 0;
+      bufferBytesRemaining = 0;
       startMediaTimeState = START_NOT_SET;
       latencyUs = 0;
       resetSyncParams();
@@ -657,13 +769,17 @@ public final class AudioTrack {
     }
   }
 
-  /** Releases all resources associated with this instance. */
+  /**
+   * Releases all resources associated with this instance.
+   */
   public void release() {
     reset();
     releaseKeepSessionIdAudioTrack();
   }
 
-  /** Releases {@link #keepSessionIdAudioTrack} asynchronously, if it is non-{@code null}. */
+  /**
+   * Releases {@link #keepSessionIdAudioTrack} asynchronously, if it is non-{@code null}.
+   */
   private void releaseKeepSessionIdAudioTrack() {
     if (keepSessionIdAudioTrack == null) {
       return;
@@ -680,7 +796,9 @@ public final class AudioTrack {
     }.start();
   }
 
-  /** Returns whether {@link #getCurrentPositionUs} can return the current playback position. */
+  /**
+   * Returns whether {@link #getCurrentPositionUs} can return the current playback position.
+   */
   private boolean hasCurrentPositionUs() {
     return isInitialized() && startMediaTimeState != START_NOT_SET;
   }
@@ -709,10 +827,13 @@ public final class AudioTrack {
       }
     }
 
-    // Don't sample the timestamp and latency if this is a passthrough AudioTrack, as the returned
-    // values cause audio/video synchronization to be incorrect.
-    if (!isPassthrough()
-        && systemClockUs - lastTimestampSampleTimeUs >= MIN_TIMESTAMP_SAMPLE_INTERVAL_US) {
+    if (needsPassthroughWorkarounds()) {
+      // Don't sample the timestamp and latency if this is an AC-3 passthrough AudioTrack on
+      // platform API versions 21/22, as incorrect values are returned. See [Internal: b/21145353].
+      return;
+    }
+
+    if (systemClockUs - lastTimestampSampleTimeUs >= MIN_TIMESTAMP_SAMPLE_INTERVAL_US) {
       audioTimestampSet = audioTrackUtil.updateTimestamp();
       if (audioTimestampSet) {
         // Perform sanity checks on the timestamp.
@@ -744,12 +865,12 @@ public final class AudioTrack {
           audioTimestampSet = false;
         }
       }
-      if (getLatencyMethod != null) {
+      if (getLatencyMethod != null && !passthrough) {
         try {
           // Compute the audio track latency, excluding the latency due to the buffer (leaving
           // latency due to the mixer and audio hardware driver).
           latencyUs = (Integer) getLatencyMethod.invoke(audioTrack, (Object[]) null) * 1000L
-              - framesToDurationUs(bytesToFrames(bufferSize));
+              - bufferSizeUs;
           // Sanity check that the latency is non-negative.
           latencyUs = Math.max(latencyUs, 0);
           // Sanity check that the latency isn't too large.
@@ -791,13 +912,8 @@ public final class AudioTrack {
     throw new InitializationException(state, sampleRate, channelConfig, bufferSize);
   }
 
-  private long bytesToFrames(long byteCount) {
-    if (isPassthrough()) {
-      return passthroughBitrate == UNKNOWN_BITRATE
-          ? 0L : byteCount * 8 * sampleRate / (1000 * passthroughBitrate);
-    } else {
-      return byteCount / frameSize;
-    }
+  private long pcmBytesToFrames(long byteCount) {
+    return byteCount / pcmFrameSize;
   }
 
   private long framesToDurationUs(long frameCount) {
@@ -806,6 +922,10 @@ public final class AudioTrack {
 
   private long durationUsToFrames(long durationUs) {
     return (durationUs * sampleRate) / C.MICROS_PER_SECOND;
+  }
+
+  private long getSubmittedFrames() {
+    return passthrough ? submittedEncodedFrames : pcmBytesToFrames(submittedPcmBytes);
   }
 
   private void resetSyncParams() {
@@ -817,18 +937,137 @@ public final class AudioTrack {
     lastTimestampSampleTimeUs = 0;
   }
 
-  private boolean isPassthrough() {
-    return encoding == C.ENCODING_AC3 || encoding == C.ENCODING_E_AC3;
+  /**
+   * Returns whether to work around problems with passthrough audio tracks.
+   * See [Internal: b/18899620, b/19187573, b/21145353].
+   */
+  private boolean needsPassthroughWorkarounds() {
+    return Util.SDK_INT < 23
+        && (targetEncoding == C.ENCODING_AC3 || targetEncoding == C.ENCODING_E_AC3);
+  }
+
+  /**
+   * Returns whether the audio track should behave as though it has pending data. This is to work
+   * around an issue on platform API versions 21/22 where AC-3 audio tracks can't be paused, so we
+   * empty their buffers when paused. In this case, they should still behave as if they have
+   * pending data, otherwise writing will never resume.
+   */
+  private boolean overrideHasPendingData() {
+    return needsPassthroughWorkarounds()
+        && audioTrack.getPlayState() == android.media.AudioTrack.PLAYSTATE_PAUSED
+        && audioTrack.getPlaybackHeadPosition() == 0;
+  }
+
+  /**
+   * Converts the provided buffer into 16-bit PCM.
+   *
+   * @param buffer The buffer containing the data to convert.
+   * @param offset The offset of the data in the buffer.
+   * @param size The size in bytes of the data in the buffer.
+   * @param sourceEncoding The data encoding.
+   * @param out A buffer into which the output should be written, if its capacity is sufficient.
+   * @return The 16-bit PCM output. Different to the out parameter if null was passed, or if the
+   *     capacity was insufficient for the output.
+   */
+  private static ByteBuffer resampleTo16BitPcm(ByteBuffer buffer, int offset, int size,
+      int sourceEncoding, ByteBuffer out) {
+    int resampledSize;
+    switch (sourceEncoding) {
+      case C.ENCODING_PCM_8BIT:
+        resampledSize = size * 2;
+        break;
+      case C.ENCODING_PCM_24BIT:
+        resampledSize = (size / 3) * 2;
+        break;
+      case C.ENCODING_PCM_32BIT:
+        resampledSize = size / 2;
+        break;
+      default:
+        // Never happens.
+        throw new IllegalStateException();
+    }
+
+    ByteBuffer resampledBuffer = out;
+    if (resampledBuffer == null || resampledBuffer.capacity() < resampledSize) {
+      resampledBuffer = ByteBuffer.allocateDirect(resampledSize);
+    }
+    resampledBuffer.position(0);
+    resampledBuffer.limit(resampledSize);
+
+    // Samples are little endian.
+    int limit = offset + size;
+    switch (sourceEncoding) {
+      case C.ENCODING_PCM_8BIT:
+        // 8->16 bit resampling. Shift each byte from [0, 256) to [-128, 128) and scale up.
+        for (int i = offset; i < limit; i++) {
+          resampledBuffer.put((byte) 0);
+          resampledBuffer.put((byte) ((buffer.get(i) & 0xFF) - 128));
+        }
+        break;
+      case C.ENCODING_PCM_24BIT:
+        // 24->16 bit resampling. Drop the least significant byte.
+        for (int i = offset; i < limit; i += 3) {
+          resampledBuffer.put(buffer.get(i + 1));
+          resampledBuffer.put(buffer.get(i + 2));
+        }
+        break;
+      case C.ENCODING_PCM_32BIT:
+        // 32->16 bit resampling. Drop the two least significant bytes.
+        for (int i = offset; i < limit; i += 4) {
+          resampledBuffer.put(buffer.get(i + 2));
+          resampledBuffer.put(buffer.get(i + 3));
+        }
+        break;
+      default:
+        // Never happens.
+        throw new IllegalStateException();
+    }
+
+    resampledBuffer.position(0);
+    return resampledBuffer;
   }
 
   private static int getEncodingForMimeType(String mimeType) {
-    if (MimeTypes.AUDIO_AC3.equals(mimeType)) {
-      return C.ENCODING_AC3;
+    switch (mimeType) {
+      case MimeTypes.AUDIO_AC3:
+        return C.ENCODING_AC3;
+      case MimeTypes.AUDIO_E_AC3:
+        return C.ENCODING_E_AC3;
+      case MimeTypes.AUDIO_DTS:
+        return C.ENCODING_DTS;
+      case MimeTypes.AUDIO_DTS_HD:
+        return C.ENCODING_DTS_HD;
+      default:
+        return C.ENCODING_INVALID;
     }
-    if (MimeTypes.AUDIO_EC3.equals(mimeType)) {
-      return C.ENCODING_E_AC3;
+  }
+
+  private static int getFramesPerEncodedSample(int encoding, ByteBuffer buffer) {
+    if (encoding == C.ENCODING_DTS || encoding == C.ENCODING_DTS_HD) {
+      return DtsUtil.parseDtsAudioSampleCount(buffer);
+    } else if (encoding == C.ENCODING_AC3) {
+      return Ac3Util.getAc3SyncframeAudioSampleCount();
+    } else if (encoding == C.ENCODING_E_AC3) {
+      return Ac3Util.parseEAc3SyncframeAudioSampleCount(buffer);
+    } else {
+      throw new IllegalStateException("Unexpected audio encoding: " + encoding);
     }
-    return AudioFormat.ENCODING_INVALID;
+  }
+
+  @TargetApi(21)
+  private static int writeNonBlockingV21(
+      android.media.AudioTrack audioTrack, ByteBuffer buffer, int size) {
+    return audioTrack.write(buffer, size, android.media.AudioTrack.WRITE_NON_BLOCKING);
+  }
+
+  @TargetApi(21)
+  private static void setAudioTrackVolumeV21(android.media.AudioTrack audioTrack, float volume) {
+    audioTrack.setVolume(volume);
+  }
+
+  @SuppressWarnings("deprecation")
+  private static void setAudioTrackVolumeV3(android.media.AudioTrack audioTrack, float volume) {
+    audioTrack.setStereoVolume(volume, volume);
   }
 
   /**
@@ -837,7 +1076,7 @@ public final class AudioTrack {
   private static class AudioTrackUtil {
 
     protected android.media.AudioTrack audioTrack;
-    private boolean isPassthrough;
+    private boolean needsPassthroughWorkaround;
     private int sampleRate;
     private long lastRawPlaybackHeadPosition;
     private long rawPlaybackHeadWrapCount;
@@ -851,11 +1090,13 @@ public final class AudioTrack {
      * Reconfigures the audio track utility helper to use the specified {@code audioTrack}.
      *
      * @param audioTrack The audio track to wrap.
-     * @param isPassthrough Whether the audio track is used for passthrough (e.g. AC-3) playback.
+     * @param needsPassthroughWorkaround Whether to workaround issues with pausing AC-3 passthrough
+     *     audio tracks on platform API version 21/22.
      */
-    public void reconfigure(android.media.AudioTrack audioTrack, boolean isPassthrough) {
+    public void reconfigure(android.media.AudioTrack audioTrack,
+        boolean needsPassthroughWorkaround) {
       this.audioTrack = audioTrack;
-      this.isPassthrough = isPassthrough;
+      this.needsPassthroughWorkaround = needsPassthroughWorkaround;
       stopTimestampUs = -1;
       lastRawPlaybackHeadPosition = 0;
       rawPlaybackHeadWrapCount = 0;
@@ -863,20 +1104,6 @@ public final class AudioTrack {
       if (audioTrack != null) {
         sampleRate = audioTrack.getSampleRate();
       }
-    }
-
-    /**
-     * Returns whether the audio track should behave as though it has pending data. This is to work
-     * around an issue on platform API versions 21/22 where AC-3 audio tracks can't be paused, so we
-     * empty their buffers when paused. In this case, they should still behave as if they have
-     * pending data, otherwise writing will never resume.
-     *
-     * @see #handleBuffer
-     */
-    public boolean overrideHasPendingData() {
-      return Util.SDK_INT <= 22 && isPassthrough
-          && audioTrack.getPlayState() == android.media.AudioTrack.PLAYSTATE_PAUSED
-          && audioTrack.getPlaybackHeadPosition() == 0;
     }
 
     /**
@@ -929,7 +1156,7 @@ public final class AudioTrack {
       }
 
       long rawPlaybackHeadPosition = 0xFFFFFFFFL & audioTrack.getPlaybackHeadPosition();
-      if (Util.SDK_INT <= 22 && isPassthrough) {
+      if (needsPassthroughWorkaround) {
         // Work around an issue with passthrough/direct AudioTracks on platform API versions 21/22
         // where the playback head position jumps back to zero on paused passthrough/direct audio
         // tracks. See [Internal: b/19187573].
@@ -993,6 +1220,27 @@ public final class AudioTrack {
       throw new UnsupportedOperationException();
     }
 
+    /**
+     * Sets the Playback Parameters to be used by the underlying {@link android.media.AudioTrack}.
+     *
+     * @param playbackParams to be used by the {@link android.media.AudioTrack}.
+     * @throws UnsupportedOperationException If Playback Parameters are not supported
+     *     (i.e. SDK_INT < 23).
+     */
+    public void setPlaybackParameters(PlaybackParams playbackParams) {
+      throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Returns the configured playback speed according to the used Playback Parameters. If these are
+     * not supported, 1.0f(normal speed) is returned.
+     *
+     * @return The speed factor used by the underlying {@link android.media.AudioTrack}.
+     */
+    public float getPlaybackSpeed() {
+      return 1.0f;
+    }
+
   }
 
   @TargetApi(19)
@@ -1009,8 +1257,9 @@ public final class AudioTrack {
     }
 
     @Override
-    public void reconfigure(android.media.AudioTrack audioTrack, boolean isPassthrough) {
-      super.reconfigure(audioTrack, isPassthrough);
+    public void reconfigure(android.media.AudioTrack audioTrack,
+        boolean needsPassthroughWorkaround) {
+      super.reconfigure(audioTrack, needsPassthroughWorkaround);
       rawTimestampFramePositionWrapCount = 0;
       lastRawTimestampFramePosition = 0;
       lastTimestampFramePosition = 0;
@@ -1039,6 +1288,45 @@ public final class AudioTrack {
     @Override
     public long getTimestampFramePosition() {
       return lastTimestampFramePosition;
+    }
+
+  }
+
+  @TargetApi(23)
+  private static class AudioTrackUtilV23 extends AudioTrackUtilV19 {
+
+    private PlaybackParams playbackParams;
+    private float playbackSpeed;
+
+    public AudioTrackUtilV23() {
+      playbackSpeed = 1.0f;
+    }
+
+    @Override
+    public void reconfigure(android.media.AudioTrack audioTrack,
+        boolean needsPassthroughWorkaround) {
+      super.reconfigure(audioTrack, needsPassthroughWorkaround);
+      maybeApplyPlaybackParams();
+    }
+
+    @Override
+    public void setPlaybackParameters(PlaybackParams playbackParams) {
+      playbackParams = (playbackParams != null ? playbackParams : new PlaybackParams())
+          .allowDefaults();
+      this.playbackParams = playbackParams;
+      this.playbackSpeed = playbackParams.getSpeed();
+      maybeApplyPlaybackParams();
+    }
+
+    @Override
+    public float getPlaybackSpeed() {
+      return playbackSpeed;
+    }
+
+    private void maybeApplyPlaybackParams() {
+      if (audioTrack != null && playbackParams != null) {
+        audioTrack.setPlaybackParams(playbackParams);
+      }
     }
 
   }

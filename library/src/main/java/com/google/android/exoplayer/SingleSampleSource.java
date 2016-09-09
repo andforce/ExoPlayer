@@ -15,16 +15,15 @@
  */
 package com.google.android.exoplayer;
 
+import android.net.Uri;
+import android.os.Handler;
+import android.os.SystemClock;
 import com.google.android.exoplayer.SampleSource.SampleSourceReader;
 import com.google.android.exoplayer.upstream.DataSource;
 import com.google.android.exoplayer.upstream.DataSpec;
 import com.google.android.exoplayer.upstream.Loader;
 import com.google.android.exoplayer.upstream.Loader.Loadable;
 import com.google.android.exoplayer.util.Assertions;
-
-import android.net.Uri;
-import android.os.SystemClock;
-
 import java.io.IOException;
 import java.util.Arrays;
 
@@ -33,6 +32,21 @@ import java.util.Arrays;
  */
 public final class SingleSampleSource implements SampleSource, SampleSourceReader, Loader.Callback,
     Loadable {
+
+  /**
+   * Interface definition for a callback to be notified of {@link SingleSampleSource} events.
+   */
+  public interface EventListener {
+
+    /**
+     * Invoked when an error occurs loading media data.
+     *
+     * @param sourceId The id of the reporting {@link SampleSource}.
+     * @param e The cause of the failure.
+     */
+    void onLoadError(int sourceId, IOException e);
+
+  }
 
   /**
    * The default minimum number of times to retry loading data prior to failing.
@@ -52,11 +66,15 @@ public final class SingleSampleSource implements SampleSource, SampleSourceReade
   private final DataSource dataSource;
   private final MediaFormat format;
   private final int minLoadableRetryCount;
+  private final Handler eventHandler;
+  private final EventListener eventListener;
+  private final int eventSourceId;
 
   private int state;
   private byte[] sampleData;
   private int sampleSize;
 
+  private long pendingDiscontinuityPositionUs;
   private boolean loadingFinished;
   private Loader loader;
   private IOException currentLoadableException;
@@ -69,10 +87,19 @@ public final class SingleSampleSource implements SampleSource, SampleSourceReade
 
   public SingleSampleSource(Uri uri, DataSource dataSource, MediaFormat format,
       int minLoadableRetryCount) {
+    this(uri, dataSource, format, minLoadableRetryCount, null, null, 0);
+  }
+
+  public SingleSampleSource(Uri uri, DataSource dataSource, MediaFormat format,
+      int minLoadableRetryCount, Handler eventHandler, EventListener eventListener,
+      int eventSourceId) {
     this.uri = uri;
     this.dataSource = dataSource;
     this.format = format;
     this.minLoadableRetryCount = minLoadableRetryCount;
+    this.eventHandler = eventHandler;
+    this.eventListener = eventListener;
+    this.eventSourceId = eventSourceId;
     sampleData = new byte[INITIAL_SAMPLE_SIZE];
   }
 
@@ -102,6 +129,7 @@ public final class SingleSampleSource implements SampleSource, SampleSourceReade
   @Override
   public void enable(int track, long positionUs) {
     state = STATE_SEND_FORMAT;
+    pendingDiscontinuityPositionUs = NO_DISCONTINUITY;
     clearCurrentLoadableException();
     maybeStartLoading();
   }
@@ -120,11 +148,16 @@ public final class SingleSampleSource implements SampleSource, SampleSourceReade
   }
 
   @Override
+  public long readDiscontinuity(int track) {
+    long discontinuityPositionUs = pendingDiscontinuityPositionUs;
+    pendingDiscontinuityPositionUs = NO_DISCONTINUITY;
+    return discontinuityPositionUs;
+  }
+
+  @Override
   public int readData(int track, long positionUs, MediaFormatHolder formatHolder,
-      SampleHolder sampleHolder, boolean onlyReadDiscontinuity) {
-    if (onlyReadDiscontinuity) {
-      return NOTHING_READ;
-    } else if (state == STATE_END_OF_STREAM) {
+      SampleHolder sampleHolder) {
+    if (state == STATE_END_OF_STREAM) {
       return END_OF_STREAM;
     } else if (state == STATE_SEND_FORMAT) {
       formatHolder.format = format;
@@ -149,6 +182,7 @@ public final class SingleSampleSource implements SampleSource, SampleSourceReade
   @Override
   public void seekToUs(long positionUs) {
     if (state == STATE_END_OF_STREAM) {
+      pendingDiscontinuityPositionUs = positionUs;
       state = STATE_SEND_SAMPLE;
     }
   }
@@ -214,6 +248,7 @@ public final class SingleSampleSource implements SampleSource, SampleSourceReade
     currentLoadableException = e;
     currentLoadableExceptionCount++;
     currentLoadableExceptionTimestamp = SystemClock.elapsedRealtime();
+    notifyLoadError(e);
     maybeStartLoading();
   }
 
@@ -247,6 +282,17 @@ public final class SingleSampleSource implements SampleSource, SampleSourceReade
       }
     } finally {
       dataSource.close();
+    }
+  }
+
+  private void notifyLoadError(final IOException e) {
+    if (eventHandler != null && eventListener != null) {
+      eventHandler.post(new Runnable()  {
+        @Override
+        public void run() {
+          eventListener.onLoadError(eventSourceId, e);
+        }
+      });
     }
   }
 

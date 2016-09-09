@@ -16,15 +16,13 @@
 package com.google.android.exoplayer.hls;
 
 import com.google.android.exoplayer.C;
-
-import junit.framework.TestCase;
-
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.Charset;
 import java.util.List;
 import java.util.Locale;
+import junit.framework.TestCase;
 
 /**
  * Test for {@link HlsMediaPlaylistParserTest}
@@ -37,6 +35,7 @@ public class HlsMediaPlaylistParserTest extends TestCase {
         + "#EXT-X-VERSION:3\n"
         + "#EXT-X-TARGETDURATION:8\n"
         + "#EXT-X-MEDIA-SEQUENCE:2679\n"
+        + "#EXT-X-DISCONTINUITY-SEQUENCE:4\n"
         + "#EXT-X-ALLOW-CACHE:YES\n"
         + "\n"
         + "#EXTINF:7.975,\n"
@@ -45,18 +44,18 @@ public class HlsMediaPlaylistParserTest extends TestCase {
         + "\n"
         + "#EXT-X-KEY:METHOD=AES-128,URI=\"https://priv.example.com/key.php?r=2680\",IV=0x1566B\n"
         + "#EXTINF:7.975,\n"
-        + "#EXT-X-BYTERANGE:51501@51370\n"
+        + "#EXT-X-BYTERANGE:51501@2147483648\n"
         + "https://priv.example.com/fileSequence2680.ts\n"
         + "\n"
         + "#EXT-X-KEY:METHOD=NONE\n"
         + "#EXTINF:7.941,\n"
-        + "#EXT-X-BYTERANGE:51501\n" // @102871
+        + "#EXT-X-BYTERANGE:51501\n" // @2147535149
         + "https://priv.example.com/fileSequence2681.ts\n"
         + "\n"
         + "#EXT-X-DISCONTINUITY\n"
         + "#EXT-X-KEY:METHOD=AES-128,URI=\"https://priv.example.com/key.php?r=2682\"\n"
         + "#EXTINF:7.975,\n"
-        + "#EXT-X-BYTERANGE:51740\n" // @154372
+        + "#EXT-X-BYTERANGE:51740\n" // @2147586650
         + "https://priv.example.com/fileSequence2682.ts\n"
         + "\n"
         + "#EXTINF:7.975,\n"
@@ -79,7 +78,7 @@ public class HlsMediaPlaylistParserTest extends TestCase {
       assertNotNull(segments);
       assertEquals(5, segments.size());
 
-      assertEquals(false, segments.get(0).discontinuity);
+      assertEquals(4, segments.get(0).discontinuitySequenceNumber);
       assertEquals(7.975, segments.get(0).durationSecs);
       assertEquals(false, segments.get(0).isEncrypted);
       assertEquals(null, segments.get(0).encryptionKeyUri);
@@ -88,25 +87,25 @@ public class HlsMediaPlaylistParserTest extends TestCase {
       assertEquals(0, segments.get(0).byterangeOffset);
       assertEquals("https://priv.example.com/fileSequence2679.ts", segments.get(0).url);
 
-      assertEquals(false, segments.get(1).discontinuity);
+      assertEquals(4, segments.get(1).discontinuitySequenceNumber);
       assertEquals(7.975, segments.get(1).durationSecs);
       assertEquals(true, segments.get(1).isEncrypted);
       assertEquals("https://priv.example.com/key.php?r=2680", segments.get(1).encryptionKeyUri);
       assertEquals("0x1566B", segments.get(1).encryptionIV);
       assertEquals(51501, segments.get(1).byterangeLength);
-      assertEquals(51370, segments.get(1).byterangeOffset);
+      assertEquals(2147483648L, segments.get(1).byterangeOffset);
       assertEquals("https://priv.example.com/fileSequence2680.ts", segments.get(1).url);
 
-      assertEquals(false, segments.get(2).discontinuity);
+      assertEquals(4, segments.get(2).discontinuitySequenceNumber);
       assertEquals(7.941, segments.get(2).durationSecs);
       assertEquals(false, segments.get(2).isEncrypted);
       assertEquals(null, segments.get(2).encryptionKeyUri);
       assertEquals(null, segments.get(2).encryptionIV);
       assertEquals(51501, segments.get(2).byterangeLength);
-      assertEquals(102871, segments.get(2).byterangeOffset);
+      assertEquals(2147535149L, segments.get(2).byterangeOffset);
       assertEquals("https://priv.example.com/fileSequence2681.ts", segments.get(2).url);
 
-      assertEquals(true, segments.get(3).discontinuity);
+      assertEquals(5, segments.get(3).discontinuitySequenceNumber);
       assertEquals(7.975, segments.get(3).durationSecs);
       assertEquals(true, segments.get(3).isEncrypted);
       assertEquals("https://priv.example.com/key.php?r=2682", segments.get(3).encryptionKeyUri);
@@ -114,10 +113,10 @@ public class HlsMediaPlaylistParserTest extends TestCase {
       assertNotNull(segments.get(3).encryptionIV);
       assertEquals("A7A", segments.get(3).encryptionIV.toUpperCase(Locale.getDefault()));
       assertEquals(51740, segments.get(3).byterangeLength);
-      assertEquals(154372, segments.get(3).byterangeOffset);
+      assertEquals(2147586650L, segments.get(3).byterangeOffset);
       assertEquals("https://priv.example.com/fileSequence2682.ts", segments.get(3).url);
 
-      assertEquals(false, segments.get(4).discontinuity);
+      assertEquals(5, segments.get(4).discontinuitySequenceNumber);
       assertEquals(7.975, segments.get(4).durationSecs);
       assertEquals(true, segments.get(4).isEncrypted);
       assertEquals("https://priv.example.com/key.php?r=2682", segments.get(4).encryptionKeyUri);

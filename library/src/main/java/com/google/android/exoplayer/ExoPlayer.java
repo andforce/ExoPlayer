@@ -31,7 +31,7 @@ import android.os.Looper;
  * <a name="Assumptions"></a>
  * <h3>Assumptions and player construction</h3>
  *
- * <p>The implementation is designed make no assumptions about (and hence impose no restrictions
+ * <p>The implementation is designed to make no assumptions about (and hence impose no restrictions
  * on) the type of the media being played, how and where it is stored, or how it is rendered.
  * Rather than implementing the loading and rendering of media directly, {@link ExoPlayer} instead
  * delegates this work to one or more {@link TrackRenderer}s, which are injected when the player
@@ -52,7 +52,7 @@ import android.os.Looper;
  * <h3>Threading model</h3>
  *
  * <p>The figure below shows the {@link ExoPlayer} threading model.</p>
- * <p align="center"><img src="../../../../../images/exoplayer_threading_model.png"
+ * <p align="center"><img src="doc-files/exoplayer-threading-model.png"
  *     alt="MediaPlayer state diagram"
  *     border="0"/></p>
  *
@@ -79,14 +79,14 @@ import android.os.Looper;
  * have been performed asynchronously by the playback thread. In contrast, the playback state
  * accessed by {@link #getPlaybackState()} is only ever changed as a result of operations
  * completing on the playback thread, as illustrated below.</p>
- * <p align="center"><img src="../../../../../images/exoplayer_state.png"
+ * <p align="center"><img src="doc-files/exoplayer-state.png"
  *     alt="ExoPlayer state"
  *     border="0"/></p>
  *
  * <p>The possible playback state transitions are shown below. Transitions can be triggered either
  * by changes in the state of the {@link TrackRenderer}s being used, or as a result of
  * {@link #prepare(TrackRenderer[])}, {@link #stop()} or {@link #release()} being invoked.</p>
- * <p align="center"><img src="../../../../../images/exoplayer_playbackstate.png"
+ * <p align="center"><img src="doc-files/exoplayer-playbackstate.png"
  *     alt="ExoPlayer playback state transitions"
  *     border="0"/></p>
  */
@@ -212,7 +212,7 @@ public interface ExoPlayer {
   public static final int STATE_BUFFERING = 3;
   /**
    * The player is prepared and able to immediately play from the current position. The player will
-   * be playing if {@link #setPlayWhenReady(boolean)} returns true, and paused otherwise.
+   * be playing if {@link #getPlayWhenReady()} returns true, and paused otherwise.
    */
   public static final int STATE_READY = 4;
   /**
@@ -272,42 +272,6 @@ public interface ExoPlayer {
    *     value that was passed to the {@link ExoPlayer.Factory#newInstance} method.
    */
   public void prepare(TrackRenderer... renderers);
-
-  /**
-   * Returns whether the renderer at the given index has media to play.
-   * <p>
-   * Always returns false whilst the player is in the {@link #STATE_PREPARING} state.
-   *
-   * @deprecated Use {@code getTrackCount(rendererIndex) > 0}.
-   * @param rendererIndex The index of the renderer.
-   * @return True if the renderer has media to play, false otherwise.
-   */
-  @Deprecated
-  public boolean getRendererHasMedia(int rendererIndex);
-
-  /**
-   * Sets whether the renderer at the given index is enabled.
-   *
-   * @deprecated Use {@code setSelectedTrack(rendererIndex, trackIndex)}. Passing
-   *     {@link #TRACK_DEFAULT} as {@code trackIndex} is equivalent to enabling the renderer with
-   *     this method. Passing {@link #TRACK_DISABLED} is equivalent to disabling the renderer.
-   * @param rendererIndex The index of the renderer.
-   * @param enabled Whether the renderer at the given index should be enabled.
-   */
-  @Deprecated
-  public void setRendererEnabled(int rendererIndex, boolean enabled);
-
-  /**
-   * Whether the renderer at the given index is enabled.
-   *
-   * @deprecated Use {@code getSelectedTrack(rendererIndex)}. A non-negative return value from that
-   *     method is equivalent to this method returning true. A negative return value is equivalent
-   *     to this method returning false.
-   * @param rendererIndex The index of the renderer.
-   * @return Whether the renderer is enabled.
-   */
-  @Deprecated
-  public boolean getRendererEnabled(int rendererIndex);
 
   /**
    * Returns the number of tracks exposed by the specified renderer.

@@ -16,11 +16,11 @@
 package com.google.android.exoplayer.extractor.webm;
 
 import com.google.android.exoplayer.C;
+import com.google.android.exoplayer.ParserException;
 import com.google.android.exoplayer.extractor.ExtractorInput;
 import com.google.android.exoplayer.util.Assertions;
-
+import java.io.EOFException;
 import java.io.IOException;
-import java.nio.charset.Charset;
 import java.util.Stack;
 
 /**
@@ -31,6 +31,9 @@ import java.util.Stack;
   private static final int ELEMENT_STATE_READ_ID = 0;
   private static final int ELEMENT_STATE_READ_CONTENT_SIZE = 1;
   private static final int ELEMENT_STATE_READ_CONTENT = 2;
+
+  private static final int MAX_ID_BYTES = 4;
+  private static final int MAX_LENGTH_BYTES = 8;
 
   private static final int MAX_INTEGER_ELEMENT_SIZE_BYTES = 8;
   private static final int VALID_FLOAT32_ELEMENT_SIZE_BYTES = 4;
@@ -68,8 +71,11 @@ import java.util.Stack;
       }
 
       if (elementState == ELEMENT_STATE_READ_ID) {
-        long result = varintReader.readUnsignedVarint(input, true, false);
-        if (result == -1) {
+        long result = varintReader.readUnsignedVarint(input, true, false, MAX_ID_BYTES);
+        if (result == C.RESULT_MAX_LENGTH_EXCEEDED) {
+          result = maybeResyncToNextLevel1Element(input);
+        }
+        if (result == C.RESULT_END_OF_INPUT) {
           return false;
         }
         // Element IDs are at most 4 bytes, so we can cast to integers.
@@ -78,7 +84,7 @@ import java.util.Stack;
       }
 
       if (elementState == ELEMENT_STATE_READ_CONTENT_SIZE) {
-        elementContentSize = varintReader.readUnsignedVarint(input, false, true);
+        elementContentSize = varintReader.readUnsignedVarint(input, false, true, MAX_LENGTH_BYTES);
         elementState = ELEMENT_STATE_READ_CONTENT;
       }
 
@@ -93,7 +99,7 @@ import java.util.Stack;
           return true;
         case TYPE_UNSIGNED_INT:
           if (elementContentSize > MAX_INTEGER_ELEMENT_SIZE_BYTES) {
-            throw new IllegalStateException("Invalid integer size: " + elementContentSize);
+            throw new ParserException("Invalid integer size: " + elementContentSize);
           }
           output.integerElement(elementId, readInteger(input, (int) elementContentSize));
           elementState = ELEMENT_STATE_READ_ID;
@@ -101,14 +107,14 @@ import java.util.Stack;
         case TYPE_FLOAT:
           if (elementContentSize != VALID_FLOAT32_ELEMENT_SIZE_BYTES
               && elementContentSize != VALID_FLOAT64_ELEMENT_SIZE_BYTES) {
-            throw new IllegalStateException("Invalid float size: " + elementContentSize);
+            throw new ParserException("Invalid float size: " + elementContentSize);
           }
           output.floatElement(elementId, readFloat(input, (int) elementContentSize));
           elementState = ELEMENT_STATE_READ_ID;
           return true;
         case TYPE_STRING:
           if (elementContentSize > Integer.MAX_VALUE) {
-            throw new IllegalStateException("String element size: " + elementContentSize);
+            throw new ParserException("String element size: " + elementContentSize);
           }
           output.stringElement(elementId, readString(input, (int) elementContentSize));
           elementState = ELEMENT_STATE_READ_ID;
@@ -122,8 +128,36 @@ import java.util.Stack;
           elementState = ELEMENT_STATE_READ_ID;
           break;
         default:
-          throw new IllegalStateException("Invalid element type " + type);
+          throw new ParserException("Invalid element type " + type);
       }
+    }
+  }
+
+  /**
+   * Does a byte by byte search to try and find the next level 1 element. This method is called if
+   * some invalid data is encountered in the parser.
+   *
+   * @param input The {@link ExtractorInput} from which data has to be read.
+   * @return id of the next level 1 element that has been found.
+   * @throws EOFException If the end of input was encountered when searching for the next level 1
+   *     element.
+   * @throws IOException If an error occurs reading from the input.
+   * @throws InterruptedException If the thread is interrupted.
+   */
+  private long maybeResyncToNextLevel1Element(ExtractorInput input) throws EOFException,
+      IOException, InterruptedException {
+    input.resetPeekPosition();
+    while (true) {
+      input.peekFully(scratch, 0, MAX_ID_BYTES);
+      int varintLength = VarintReader.parseUnsignedVarintLength(scratch[0]);
+      if (varintLength != -1 && varintLength <= MAX_ID_BYTES) {
+        int potentialId = (int) VarintReader.assembleVarint(scratch, varintLength, false);
+        if (output.isLevel1Element(potentialId)) {
+          input.skipFully(varintLength);
+          return potentialId;
+        }
+      }
+      input.skipFully(1);
     }
   }
 
@@ -178,9 +212,12 @@ import java.util.Stack;
    */
   private String readString(ExtractorInput input, int byteLength)
       throws IOException, InterruptedException {
+    if (byteLength == 0) {
+      return "";
+    }
     byte[] stringBytes = new byte[byteLength];
     input.readFully(stringBytes, 0, byteLength);
-    return new String(stringBytes, Charset.forName(C.UTF8_NAME));
+    return new String(stringBytes);
   }
 
   /**

@@ -15,12 +15,17 @@
  */
 package com.google.android.exoplayer.dash.mpd;
 
+import android.text.TextUtils;
+import android.util.Base64;
+import android.util.Log;
+import android.util.Pair;
 import com.google.android.exoplayer.ParserException;
 import com.google.android.exoplayer.chunk.Format;
 import com.google.android.exoplayer.dash.mpd.SegmentBase.SegmentList;
 import com.google.android.exoplayer.dash.mpd.SegmentBase.SegmentTemplate;
 import com.google.android.exoplayer.dash.mpd.SegmentBase.SegmentTimelineElement;
 import com.google.android.exoplayer.dash.mpd.SegmentBase.SingleSegmentBase;
+import com.google.android.exoplayer.drm.DrmInitData.SchemeInitData;
 import com.google.android.exoplayer.extractor.mp4.PsshAtomUtil;
 import com.google.android.exoplayer.upstream.UriLoadable;
 import com.google.android.exoplayer.util.Assertions;
@@ -28,16 +33,6 @@ import com.google.android.exoplayer.util.MimeTypes;
 import com.google.android.exoplayer.util.ParserUtil;
 import com.google.android.exoplayer.util.UriUtil;
 import com.google.android.exoplayer.util.Util;
-
-import android.text.TextUtils;
-import android.util.Base64;
-import android.util.Pair;
-
-import org.xml.sax.helpers.DefaultHandler;
-import org.xmlpull.v1.XmlPullParser;
-import org.xmlpull.v1.XmlPullParserException;
-import org.xmlpull.v1.XmlPullParserFactory;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.text.ParseException;
@@ -48,12 +43,18 @@ import java.util.List;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.xml.sax.helpers.DefaultHandler;
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserException;
+import org.xmlpull.v1.XmlPullParserFactory;
 
 /**
  * A parser of media presentation description files.
  */
 public class MediaPresentationDescriptionParser extends DefaultHandler
     implements UriLoadable.Parser<MediaPresentationDescription> {
+
+  private static final String TAG = "MediaPresentationDescriptionParser";
 
   private static final Pattern FRAME_RATE_PATTERN = Pattern.compile("(\\d+)(?:/(\\d+))?");
 
@@ -110,8 +111,7 @@ public class MediaPresentationDescriptionParser extends DefaultHandler
     String typeString = xpp.getAttributeValue(null, "type");
     boolean dynamic = (typeString != null) ? typeString.equals("dynamic") : false;
     long minUpdateTimeMs = (dynamic) ? parseDuration(xpp, "minimumUpdatePeriod", -1) : -1;
-    long timeShiftBufferDepthMs = (dynamic) ? parseDuration(xpp, "timeShiftBufferDepth", -1)
-        : -1;
+    long timeShiftBufferDepthMs = (dynamic) ? parseDuration(xpp, "timeShiftBufferDepth", -1) : -1;
     UtcTimingElement utcTiming = null;
     String location = null;
 
@@ -149,14 +149,17 @@ public class MediaPresentationDescriptionParser extends DefaultHandler
       }
     } while (!ParserUtil.isEndTag(xpp, "MPD"));
 
-    if (!dynamic && durationMs == -1) {
-      // The manifest is static and doesn't define a duration. This is unexpected.
+    if (durationMs == -1) {
       if (nextPeriodStartMs != -1) {
         // If we know the end time of the final period, we can use it as the duration.
         durationMs = nextPeriodStartMs;
-      } else {
+      } else if (!dynamic) {
         throw new ParserException("Unable to determine duration of static manifest.");
       }
+    }
+
+    if (periods.isEmpty()) {
+      throw new ParserException("No periods found.");
     }
 
     return buildMediaPresentationDescription(availabilityStartTime, durationMs, minBufferTimeMs,
@@ -241,7 +244,10 @@ public class MediaPresentationDescriptionParser extends DefaultHandler
           seenFirstBaseUrl = true;
         }
       } else if (ParserUtil.isStartTag(xpp, "ContentProtection")) {
-        contentProtectionsBuilder.addAdaptationSetProtection(parseContentProtection(xpp));
+        ContentProtection contentProtection = parseContentProtection(xpp);
+        if (contentProtection != null) {
+          contentProtectionsBuilder.addAdaptationSetProtection(contentProtection);
+        }
       } else if (ParserUtil.isStartTag(xpp, "ContentComponent")) {
         language = checkLanguageConsistency(language, xpp.getAttributeValue(null, "lang"));
         contentType = checkContentTypeConsistency(contentType, parseContentType(xpp));
@@ -304,32 +310,37 @@ public class MediaPresentationDescriptionParser extends DefaultHandler
   }
 
   /**
-   * Parses a ContentProtection element.
+   * Parses a {@link ContentProtection} element.
    *
    * @throws XmlPullParserException If an error occurs parsing the element.
    * @throws IOException If an error occurs reading the element.
+   * @return The parsed {@link ContentProtection} element, or null if the element is unsupported.
    **/
   protected ContentProtection parseContentProtection(XmlPullParser xpp)
       throws XmlPullParserException, IOException {
     String schemeIdUri = xpp.getAttributeValue(null, "schemeIdUri");
     UUID uuid = null;
-    byte[] psshAtom = null;
+    SchemeInitData data = null;
+    boolean seenPsshElement = false;
     do {
       xpp.next();
-      // The cenc:pssh element is defined in 23001-7:2015
+      // The cenc:pssh element is defined in 23001-7:2015.
       if (ParserUtil.isStartTag(xpp, "cenc:pssh") && xpp.next() == XmlPullParser.TEXT) {
-        psshAtom = Base64.decode(xpp.getText(), Base64.DEFAULT);
-        uuid = PsshAtomUtil.parseUuid(psshAtom);
-        if (uuid == null) {
-          throw new ParserException("Invalid pssh atom in cenc:pssh element");
-        }
+        seenPsshElement = true;
+        data = new SchemeInitData(MimeTypes.VIDEO_MP4,
+            Base64.decode(xpp.getText(), Base64.DEFAULT));
+        uuid = PsshAtomUtil.parseUuid(data.data);
       }
     } while (!ParserUtil.isEndTag(xpp, "ContentProtection"));
-
-    return buildContentProtection(schemeIdUri, uuid, psshAtom);
+    if (seenPsshElement && uuid == null) {
+      Log.w(TAG, "Skipped unsupported ContentProtection element");
+      return null;
+    }
+    return buildContentProtection(schemeIdUri, uuid, data);
   }
 
-  protected ContentProtection buildContentProtection(String schemeIdUri, UUID uuid, byte[] data) {
+  protected ContentProtection buildContentProtection(String schemeIdUri, UUID uuid,
+      SchemeInitData data) {
     return new ContentProtection(schemeIdUri, uuid, data);
   }
 
@@ -382,7 +393,10 @@ public class MediaPresentationDescriptionParser extends DefaultHandler
       } else if (ParserUtil.isStartTag(xpp, "SegmentTemplate")) {
         segmentBase = parseSegmentTemplate(xpp, baseUrl, (SegmentTemplate) segmentBase);
       } else if (ParserUtil.isStartTag(xpp, "ContentProtection")) {
-        contentProtectionsBuilder.addRepresentationProtection(parseContentProtection(xpp));
+        ContentProtection contentProtection = parseContentProtection(xpp);
+        if (contentProtection != null) {
+          contentProtectionsBuilder.addAdaptationSetProtection(contentProtection);
+        }
       }
     } while (!ParserUtil.isEndTag(xpp, "Representation"));
 

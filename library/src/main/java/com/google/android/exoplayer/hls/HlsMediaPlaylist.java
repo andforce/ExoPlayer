@@ -16,7 +16,6 @@
 package com.google.android.exoplayer.hls;
 
 import com.google.android.exoplayer.C;
-
 import java.util.List;
 
 /**
@@ -29,22 +28,22 @@ public final class HlsMediaPlaylist extends HlsPlaylist {
    */
   public static final class Segment implements Comparable<Long> {
 
-    public final boolean discontinuity;
-    public final double durationSecs;
     public final String url;
+    public final double durationSecs;
+    public final int discontinuitySequenceNumber;
     public final long startTimeUs;
     public final boolean isEncrypted;
     public final String encryptionKeyUri;
     public final String encryptionIV;
-    public final int byterangeOffset;
-    public final int byterangeLength;
+    public final long byterangeOffset;
+    public final long byterangeLength;
 
-    public Segment(String uri, double durationSecs, boolean discontinuity, long startTimeUs,
-        boolean isEncrypted, String encryptionKeyUri, String encryptionIV, int byterangeOffset,
-        int byterangeLength) {
+    public Segment(String uri, double durationSecs, int discontinuitySequenceNumber,
+        long startTimeUs, boolean isEncrypted, String encryptionKeyUri, String encryptionIV,
+        long byterangeOffset, long byterangeLength) {
       this.url = uri;
       this.durationSecs = durationSecs;
-      this.discontinuity = discontinuity;
+      this.discontinuitySequenceNumber = discontinuitySequenceNumber;
       this.startTimeUs = startTimeUs;
       this.isEncrypted = isEncrypted;
       this.encryptionKeyUri = encryptionKeyUri;

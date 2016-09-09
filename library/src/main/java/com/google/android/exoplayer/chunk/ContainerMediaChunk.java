@@ -26,7 +26,6 @@ import com.google.android.exoplayer.upstream.DataSource;
 import com.google.android.exoplayer.upstream.DataSpec;
 import com.google.android.exoplayer.util.ParsableByteArray;
 import com.google.android.exoplayer.util.Util;
-
 import java.io.IOException;
 
 /**
@@ -158,7 +157,7 @@ public class ContainerMediaChunk extends BaseMediaChunk implements SingleTrackOu
         // Set the target to ourselves.
         extractorWrapper.init(this);
       }
-      // Load and parse the initialization data.
+      // Load and parse the sample data.
       try {
         int result = Extractor.RESULT_CONTINUE;
         while (result == Extractor.RESULT_CONTINUE && !loadCanceled) {

@@ -24,7 +24,6 @@ import com.google.android.exoplayer.extractor.SeekMap;
 import com.google.android.exoplayer.extractor.TrackOutput;
 import com.google.android.exoplayer.util.Assertions;
 import com.google.android.exoplayer.util.ParsableByteArray;
-
 import java.io.IOException;
 
 /**
@@ -32,7 +31,7 @@ import java.io.IOException;
  * <p>
  * The wrapper allows switching of the {@link SingleTrackOutput} that receives parsed data.
  */
-public final class ChunkExtractorWrapper implements ExtractorOutput, TrackOutput {
+public class ChunkExtractorWrapper implements ExtractorOutput, TrackOutput {
 
   /**
    * Receives stream level data extracted by the wrapped {@link Extractor}.

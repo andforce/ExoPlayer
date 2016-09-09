@@ -15,14 +15,12 @@
  */
 package com.google.android.exoplayer.demo;
 
+import android.annotation.TargetApi;
+import android.text.TextUtils;
+import com.google.android.exoplayer.drm.ExoMediaDrm.KeyRequest;
+import com.google.android.exoplayer.drm.ExoMediaDrm.ProvisionRequest;
 import com.google.android.exoplayer.drm.MediaDrmCallback;
 import com.google.android.exoplayer.util.Util;
-
-import android.annotation.TargetApi;
-import android.media.MediaDrm.KeyRequest;
-import android.media.MediaDrm.ProvisionRequest;
-import android.text.TextUtils;
-
 import java.io.IOException;
 import java.util.UUID;
 
@@ -33,12 +31,13 @@ import java.util.UUID;
 public class WidevineTestMediaDrmCallback implements MediaDrmCallback {
 
   private static final String WIDEVINE_GTS_DEFAULT_BASE_URI =
-      "http://wv-staging-proxy.appspot.com/proxy?provider=YouTube&video_id=";
+      "https://proxy.uat.widevine.com/proxy";
 
   private final String defaultUri;
 
-  public WidevineTestMediaDrmCallback(String videoId) {
-    defaultUri = WIDEVINE_GTS_DEFAULT_BASE_URI + videoId;
+  public WidevineTestMediaDrmCallback(String contentId, String provider) {
+    String params = "?video_id=" + contentId + "&provider=" + provider;
+    defaultUri = WIDEVINE_GTS_DEFAULT_BASE_URI + params;
   }
 
   @Override

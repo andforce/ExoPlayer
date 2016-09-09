@@ -19,10 +19,7 @@ import com.google.android.exoplayer.text.Cue;
 import com.google.android.exoplayer.text.Subtitle;
 import com.google.android.exoplayer.text.SubtitleParser;
 import com.google.android.exoplayer.util.MimeTypes;
-
-import java.io.DataInputStream;
-import java.io.IOException;
-import java.io.InputStream;
+import com.google.android.exoplayer.util.ParsableByteArray;
 
 /**
  * A {@link SubtitleParser} for tx3g.
@@ -31,16 +28,26 @@ import java.io.InputStream;
  */
 public final class Tx3gParser implements SubtitleParser {
 
-  @Override
-  public Subtitle parse(InputStream inputStream) throws IOException {
-    DataInputStream dataInputStream  = new DataInputStream(inputStream);
-    String cueText = dataInputStream.readUTF();
-    return new Tx3gSubtitle(new Cue(cueText));
+  private final ParsableByteArray parsableByteArray;
+
+  public Tx3gParser() {
+    parsableByteArray = new ParsableByteArray();
   }
 
   @Override
   public boolean canParse(String mimeType) {
     return MimeTypes.APPLICATION_TX3G.equals(mimeType);
+  }
+
+  @Override
+  public Subtitle parse(byte[] bytes, int offset, int length) {
+    parsableByteArray.reset(bytes, length);
+    int textLength = parsableByteArray.readUnsignedShort();
+    if (textLength == 0) {
+      return Tx3gSubtitle.EMPTY;
+    }
+    String cueText = parsableByteArray.readString(textLength);
+    return new Tx3gSubtitle(new Cue(cueText));
   }
 
 }

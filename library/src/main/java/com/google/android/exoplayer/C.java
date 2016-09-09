@@ -18,6 +18,7 @@ package com.google.android.exoplayer;
 import android.media.AudioFormat;
 import android.media.MediaCodec;
 import android.media.MediaExtractor;
+import com.google.android.exoplayer.util.Util;
 
 /**
  * Defines constants that are generally useful throughout the library.
@@ -57,6 +58,31 @@ public final class C {
   public static final int CRYPTO_MODE_AES_CTR = MediaCodec.CRYPTO_MODE_AES_CTR;
 
   /**
+   * @see AudioFormat#ENCODING_INVALID
+   */
+  public static final int ENCODING_INVALID = AudioFormat.ENCODING_INVALID;
+
+  /**
+   * @see AudioFormat#ENCODING_PCM_8BIT
+   */
+  public static final int ENCODING_PCM_8BIT = AudioFormat.ENCODING_PCM_8BIT;
+
+  /**
+   * @see AudioFormat#ENCODING_PCM_16BIT
+   */
+  public static final int ENCODING_PCM_16BIT = AudioFormat.ENCODING_PCM_16BIT;
+
+  /**
+   * PCM encoding with 24 bits per sample.
+   */
+  public static final int ENCODING_PCM_24BIT = 0x80000000;
+
+  /**
+   * PCM encoding with 32 bits per sample.
+   */
+  public static final int ENCODING_PCM_32BIT = 0x40000000;
+
+  /**
    * @see AudioFormat#ENCODING_AC3
    */
   @SuppressWarnings("InlinedApi")
@@ -67,6 +93,25 @@ public final class C {
    */
   @SuppressWarnings("InlinedApi")
   public static final int ENCODING_E_AC3 = AudioFormat.ENCODING_E_AC3;
+
+  /**
+   * @see AudioFormat#ENCODING_DTS
+   */
+  @SuppressWarnings("InlinedApi")
+  public static final int ENCODING_DTS = AudioFormat.ENCODING_DTS;
+
+  /**
+   * @see AudioFormat#ENCODING_DTS_HD
+   */
+  @SuppressWarnings("InlinedApi")
+  public static final int ENCODING_DTS_HD = AudioFormat.ENCODING_DTS_HD;
+
+  /**
+   * @see AudioFormat#CHANNEL_OUT_7POINT1_SURROUND
+   */
+  @SuppressWarnings({"InlinedApi", "deprecation"})
+  public static final int CHANNEL_OUT_7POINT1_SURROUND = Util.SDK_INT < 23
+      ? AudioFormat.CHANNEL_OUT_7POINT1 : AudioFormat.CHANNEL_OUT_7POINT1_SURROUND;
 
   /**
    * @see MediaExtractor#SAMPLE_FLAG_SYNC
@@ -89,6 +134,11 @@ public final class C {
    * A return value for methods where the end of an input was encountered.
    */
   public static final int RESULT_END_OF_INPUT = -1;
+
+  /**
+   * A return value for methods where the length of parsed data exceeds the maximum length allowed.
+   */
+  public static final int RESULT_MAX_LENGTH_EXCEEDED = -2;
 
   private C() {}
 

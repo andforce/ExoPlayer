@@ -42,8 +42,8 @@ public final class TtmlStyleTest extends InstrumentationTestCase {
         assertTrue(style.isLinethrough());
         assertEquals(TtmlStyle.STYLE_BOLD_ITALIC, style.getStyle());
         assertEquals(FONT_FAMILY, style.getFontFamily());
-        assertEquals(Color.WHITE, style.getColor());
-        assertFalse("do not inherit backgroundColor", style.hasBackgroundColorSpecified());
+        assertEquals(Color.WHITE, style.getFontColor());
+        assertFalse("do not inherit backgroundColor", style.hasBackgroundColor());
     }
 
     public void testChainStyle() {
@@ -53,33 +53,10 @@ public final class TtmlStyleTest extends InstrumentationTestCase {
         assertTrue(style.isLinethrough());
         assertEquals(TtmlStyle.STYLE_BOLD_ITALIC, style.getStyle());
         assertEquals(FONT_FAMILY, style.getFontFamily());
-        assertEquals(FOREGROUND_COLOR, style.getColor());
+        assertEquals(FOREGROUND_COLOR, style.getFontColor());
         // do inherit backgroundColor when chaining
         assertEquals("do not inherit backgroundColor when chaining",
             BACKGROUND_COLOR, style.getBackgroundColor());
-    }
-
-    public void testGetInheritableStyle() {
-        // same instance as long as everything can be inherited
-        assertSame(style, style.getInheritableStyle());
-        style.inherit(createAncestorStyle());
-        assertSame(style, style.getInheritableStyle());
-        // after setting a property which is not inheritable
-        // we expect the inheritable style to be another instance
-        style.setBackgroundColor(0);
-        TtmlStyle inheritableStyle = style.getInheritableStyle();
-        assertNotSame(style, inheritableStyle);
-        // and subsequent call give always the same instance
-        assertSame(inheritableStyle, style.getInheritableStyle());
-
-        boolean exceptionThrown = false;
-        try {
-          // setting properties after calling getInheritableStyle gives an exception
-          style.setItalic(true);
-        } catch (IllegalStateException e) {
-          exceptionThrown = true;
-        }
-        assertTrue(exceptionThrown);
     }
 
     private TtmlStyle createAncestorStyle() {
@@ -88,7 +65,7 @@ public final class TtmlStyleTest extends InstrumentationTestCase {
         ancestor.setItalic(true);
         ancestor.setBold(true);
         ancestor.setBackgroundColor(BACKGROUND_COLOR);
-        ancestor.setColor(FOREGROUND_COLOR);
+        ancestor.setFontColor(FOREGROUND_COLOR);
         ancestor.setLinethrough(true);
         ancestor.setUnderline(true);
         ancestor.setFontFamily(FONT_FAMILY);
@@ -132,17 +109,17 @@ public final class TtmlStyleTest extends InstrumentationTestCase {
     }
 
     public void testColor() {
-        assertFalse(style.hasColorSpecified());
-        style.setColor(Color.BLACK);
-        assertEquals(Color.BLACK, style.getColor());
-        assertTrue(style.hasColorSpecified());
+        assertFalse(style.hasFontColor());
+        style.setFontColor(Color.BLACK);
+        assertEquals(Color.BLACK, style.getFontColor());
+        assertTrue(style.hasFontColor());
     }
 
     public void testBackgroundColor() {
-        assertFalse(style.hasBackgroundColorSpecified());
+        assertFalse(style.hasBackgroundColor());
         style.setBackgroundColor(Color.BLACK);
         assertEquals(Color.BLACK, style.getBackgroundColor());
-        assertTrue(style.hasBackgroundColorSpecified());
+        assertTrue(style.hasBackgroundColor());
     }
 
     public void testId() {

@@ -15,6 +15,10 @@
  */
 package com.google.android.exoplayer.metadata;
 
+import android.os.Handler;
+import android.os.Handler.Callback;
+import android.os.Looper;
+import android.os.Message;
 import com.google.android.exoplayer.ExoPlaybackException;
 import com.google.android.exoplayer.MediaFormat;
 import com.google.android.exoplayer.MediaFormatHolder;
@@ -23,12 +27,6 @@ import com.google.android.exoplayer.SampleSource;
 import com.google.android.exoplayer.SampleSourceTrackRenderer;
 import com.google.android.exoplayer.TrackRenderer;
 import com.google.android.exoplayer.util.Assertions;
-
-import android.os.Handler;
-import android.os.Handler.Callback;
-import android.os.Looper;
-import android.os.Message;
-
 import java.io.IOException;
 
 /**
@@ -93,29 +91,17 @@ public final class MetadataTrackRenderer<T> extends SampleSourceTrackRenderer im
   }
 
   @Override
-  protected void onEnabled(int track, long positionUs, boolean joining)
-      throws ExoPlaybackException {
-    super.onEnabled(track, positionUs, joining);
-    seekToInternal();
-  }
-
-  @Override
-  protected void seekTo(long positionUs) throws ExoPlaybackException {
-    super.seekTo(positionUs);
-    seekToInternal();
-  }
-
-  private void seekToInternal() {
+  protected void onDiscontinuity(long positionUs) {
     pendingMetadata = null;
     inputStreamEnded = false;
   }
 
   @Override
-  protected void doSomeWork(long positionUs, long elapsedRealtimeUs) throws ExoPlaybackException {
-    continueBufferingSource(positionUs);
+  protected void doSomeWork(long positionUs, long elapsedRealtimeUs, boolean sourceIsReady)
+      throws ExoPlaybackException {
     if (!inputStreamEnded && pendingMetadata == null) {
       sampleHolder.clearData();
-      int result = readSource(positionUs, formatHolder, sampleHolder, false);
+      int result = readSource(positionUs, formatHolder, sampleHolder);
       if (result == SampleSource.SAMPLE_READ) {
         pendingMetadataTimestamp = sampleHolder.timeUs;
         try {

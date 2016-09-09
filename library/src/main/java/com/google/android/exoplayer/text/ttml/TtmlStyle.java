@@ -15,57 +15,64 @@
  */
 package com.google.android.exoplayer.text.ttml;
 
-import com.google.android.exoplayer.util.Assertions;
-
 import android.graphics.Typeface;
 import android.text.Layout;
+import com.google.android.exoplayer.util.Assertions;
 
 /**
  * Style object of a <code>TtmlNode</code>
  */
-public final class TtmlStyle {
+/* package */ final class TtmlStyle {
 
-  public static final short UNSPECIFIED = -1;
+  public static final int UNSPECIFIED = -1;
 
-  public static final short STYLE_NORMAL = Typeface.NORMAL;
-  public static final short STYLE_BOLD = Typeface.BOLD;
-  public static final short STYLE_ITALIC = Typeface.ITALIC;
-  public static final short STYLE_BOLD_ITALIC = Typeface.BOLD_ITALIC;
+  public static final int STYLE_NORMAL = Typeface.NORMAL;
+  public static final int STYLE_BOLD = Typeface.BOLD;
+  public static final int STYLE_ITALIC = Typeface.ITALIC;
+  public static final int STYLE_BOLD_ITALIC = Typeface.BOLD_ITALIC;
 
-  private static final short OFF = 0;
-  private static final short ON = 1;
+  public static final int FONT_SIZE_UNIT_PIXEL = 1;
+  public static final int FONT_SIZE_UNIT_EM = 2;
+  public static final int FONT_SIZE_UNIT_PERCENT = 3;
+
+  private static final int OFF = 0;
+  private static final int ON = 1;
 
   private String fontFamily;
-  private int color;
-  private boolean colorSpecified;
+  private int fontColor;
+  private boolean hasFontColor;
   private int backgroundColor;
-  private boolean backgroundColorSpecified;
-  private short linethrough = UNSPECIFIED;
-  private short underline = UNSPECIFIED;
-  private short bold = UNSPECIFIED;
-  private short italic = UNSPECIFIED;
+  private boolean hasBackgroundColor;
+  private int linethrough;
+  private int underline;
+  private int bold;
+  private int italic;
+  private int fontSizeUnit;
+  private float fontSize;
   private String id;
   private TtmlStyle inheritableStyle;
   private Layout.Alignment textAlign;
 
+  public TtmlStyle() {
+    linethrough = UNSPECIFIED;
+    underline = UNSPECIFIED;
+    bold = UNSPECIFIED;
+    italic = UNSPECIFIED;
+    fontSizeUnit = UNSPECIFIED;
+  }
+
   /**
-   * Returns the style or <code>UNSPECIFIED</code> when no style information is given.
+   * Returns the style or {@link #UNSPECIFIED} when no style information is given.
    *
-   * @return UNSPECIFIED, STYLE_NORMAL, STYLE_BOLD, STYLE_BOLD or STYLE_BOLD_ITALIC
+   * @return {@link #UNSPECIFIED}, {@link #STYLE_NORMAL}, {@link #STYLE_BOLD}, {@link #STYLE_BOLD}
+   *     or {@link #STYLE_BOLD_ITALIC}.
    */
-  public short getStyle() {
+  public int getStyle() {
     if (bold == UNSPECIFIED && italic == UNSPECIFIED) {
       return UNSPECIFIED;
     }
-
-    short style = STYLE_NORMAL;
-    if (bold != UNSPECIFIED) {
-      style += bold;
-    }
-    if (italic != UNSPECIFIED){
-      style += italic;
-    }
-    return style;
+    return (bold != UNSPECIFIED ? bold : STYLE_NORMAL)
+        | (italic != UNSPECIFIED ? italic : STYLE_NORMAL);
   }
 
   public boolean isLinethrough() {
@@ -98,33 +105,39 @@ public final class TtmlStyle {
     return this;
   }
 
-  public int getColor() {
-    return color;
+  public int getFontColor() {
+    if (!hasFontColor) {
+      throw new IllegalStateException("Font color has not been defined.");
+    }
+    return fontColor;
   }
 
-  public TtmlStyle setColor(int color) {
+  public TtmlStyle setFontColor(int fontColor) {
     Assertions.checkState(inheritableStyle == null);
-    this.color = color;
-    colorSpecified = true;
+    this.fontColor = fontColor;
+    hasFontColor = true;
     return this;
   }
 
-  public boolean hasColorSpecified() {
-    return colorSpecified;
+  public boolean hasFontColor() {
+    return hasFontColor;
   }
 
   public int getBackgroundColor() {
+    if (!hasBackgroundColor) {
+      throw new IllegalStateException("Background color has not been defined.");
+    }
     return backgroundColor;
   }
 
   public TtmlStyle setBackgroundColor(int backgroundColor) {
     this.backgroundColor = backgroundColor;
-    backgroundColorSpecified = true;
+    hasBackgroundColor = true;
     return this;
   }
 
-  public boolean hasBackgroundColorSpecified() {
-    return backgroundColorSpecified;
+  public boolean hasBackgroundColor() {
+    return hasBackgroundColor;
   }
 
   public TtmlStyle setBold(boolean isBold) {
@@ -137,19 +150,6 @@ public final class TtmlStyle {
     Assertions.checkState(inheritableStyle == null);
     italic = isItalic ? STYLE_ITALIC : STYLE_NORMAL;
     return this;
-  }
-
-  public TtmlStyle getInheritableStyle() {
-    if (isFullyInheritable()) {
-      return this;
-    } else if (inheritableStyle == null) {
-      inheritableStyle = new TtmlStyle().inherit(this);
-    }
-    return inheritableStyle;
-  }
-
-  private boolean isFullyInheritable() {
-    return !backgroundColorSpecified;
   }
 
   /**
@@ -175,8 +175,8 @@ public final class TtmlStyle {
 
   private TtmlStyle inherit(TtmlStyle ancestor, boolean chaining) {
     if (ancestor != null) {
-      if (!colorSpecified && ancestor.colorSpecified) {
-        setColor(ancestor.color);
+      if (!hasFontColor && ancestor.hasFontColor) {
+        setFontColor(ancestor.fontColor);
       }
       if (bold == UNSPECIFIED) {
         bold = ancestor.bold;
@@ -196,8 +196,12 @@ public final class TtmlStyle {
       if (textAlign == null) {
         textAlign = ancestor.textAlign;
       }
+      if (fontSizeUnit == UNSPECIFIED) {
+        fontSizeUnit = ancestor.fontSizeUnit;
+        fontSize = ancestor.fontSize;
+      }
       // attributes not inherited as of http://www.w3.org/TR/ttml1/
-      if (chaining && !backgroundColorSpecified && ancestor.backgroundColorSpecified) {
+      if (chaining && !hasBackgroundColor && ancestor.hasBackgroundColor) {
         setBackgroundColor(ancestor.backgroundColor);
       }
     }
@@ -221,4 +225,23 @@ public final class TtmlStyle {
     this.textAlign = textAlign;
     return this;
   }
+
+  public TtmlStyle setFontSize(float fontSize) {
+    this.fontSize = fontSize;
+    return this;
+  }
+
+  public TtmlStyle setFontSizeUnit(int fontSizeUnit) {
+    this.fontSizeUnit = fontSizeUnit;
+    return this;
+  }
+
+  public int getFontSizeUnit() {
+    return fontSizeUnit;
+  }
+
+  public float getFontSize() {
+    return fontSize;
+  }
+
 }

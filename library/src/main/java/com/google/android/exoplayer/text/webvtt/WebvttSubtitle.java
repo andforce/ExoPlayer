@@ -15,13 +15,11 @@
  */
 package com.google.android.exoplayer.text.webvtt;
 
+import android.text.SpannableStringBuilder;
 import com.google.android.exoplayer.text.Cue;
 import com.google.android.exoplayer.text.Subtitle;
 import com.google.android.exoplayer.util.Assertions;
 import com.google.android.exoplayer.util.Util;
-
-import android.text.SpannableStringBuilder;
-
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -56,7 +54,6 @@ public final class WebvttSubtitle implements Subtitle {
 
   @Override
   public int getNextEventTimeIndex(long timeUs) {
-    Assertions.checkArgument(timeUs >= 0);
     int index = Util.binarySearchCeil(sortedCueTimesUs, timeUs, false, false);
     return index < sortedCueTimesUs.length ? index : -1;
   }

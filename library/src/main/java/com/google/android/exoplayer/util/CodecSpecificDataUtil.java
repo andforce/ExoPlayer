@@ -15,9 +15,7 @@
  */
 package com.google.android.exoplayer.util;
 
-import android.util.Log;
 import android.util.Pair;
-
 import java.util.ArrayList;
 import java.util.List;
 
@@ -26,34 +24,56 @@ import java.util.List;
  */
 public final class CodecSpecificDataUtil {
 
-  /**
-   * Holds data parsed from a sequence parameter set NAL unit.
-   */
-  public static final class SpsData {
-
-    public final int width;
-    public final int height;
-    public final float pixelWidthAspectRatio;
-
-    public SpsData(int width, int height, float pixelWidthAspectRatio) {
-      this.width = width;
-      this.height = height;
-      this.pixelWidthAspectRatio = pixelWidthAspectRatio;
-    }
-
-  }
-
   private static final byte[] NAL_START_CODE = new byte[] {0, 0, 0, 1};
+
+  private static final int AUDIO_SPECIFIC_CONFIG_FREQUENCY_INDEX_ARBITRARY = 0xF;
 
   private static final int[] AUDIO_SPECIFIC_CONFIG_SAMPLING_RATE_TABLE = new int[] {
     96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350
   };
 
-  private static final int[] AUDIO_SPECIFIC_CONFIG_CHANNEL_COUNT_TABLE = new int[] {
-    0, 1, 2, 3, 4, 5, 6, 8
-  };
+  private static final int AUDIO_SPECIFIC_CONFIG_CHANNEL_CONFIGURATION_INVALID = -1;
+  /**
+   * In the channel configurations below, <A> indicates a single channel element; (A, B) indicates a
+   * channel pair element; and [A] indicates a low-frequency effects element.
+   * The speaker mapping short forms used are:
+   * - FC: front center
+   * - BC: back center
+   * - FL/FR: front left/right
+   * - FCL/FCR: front center left/right
+   * - FTL/FTR: front top left/right
+   * - SL/SR: back surround left/right
+   * - BL/BR: back left/right
+   * - LFE: low frequency effects
+   */
+  private static final int[] AUDIO_SPECIFIC_CONFIG_CHANNEL_COUNT_TABLE =
+      new int[] {
+        0,
+        1, /* mono: <FC> */
+        2, /* stereo: (FL, FR) */
+        3, /* 3.0: <FC>, (FL, FR) */
+        4, /* 4.0: <FC>, (FL, FR), <BC> */
+        5, /* 5.0 back: <FC>, (FL, FR), (SL, SR) */
+        6, /* 5.1 back: <FC>, (FL, FR), (SL, SR), <BC>, [LFE] */
+        8, /* 7.1 wide back: <FC>, (FCL, FCR), (FL, FR), (SL, SR), [LFE] */
+        AUDIO_SPECIFIC_CONFIG_CHANNEL_CONFIGURATION_INVALID,
+        AUDIO_SPECIFIC_CONFIG_CHANNEL_CONFIGURATION_INVALID,
+        AUDIO_SPECIFIC_CONFIG_CHANNEL_CONFIGURATION_INVALID,
+        7, /* 6.1: <FC>, (FL, FR), (SL, SR), <RC>, [LFE] */
+        8, /* 7.1: <FC>, (FL, FR), (SL, SR), (BL, BR), [LFE] */
+        AUDIO_SPECIFIC_CONFIG_CHANNEL_CONFIGURATION_INVALID,
+        8, /* 7.1 top: <FC>, (FL, FR), (SL, SR), [LFE], (FTL, FTR) */
+        AUDIO_SPECIFIC_CONFIG_CHANNEL_CONFIGURATION_INVALID
+      };
 
-  private static final String TAG = "CodecSpecificDataUtil";
+  // Advanced Audio Coding Low-Complexity profile.
+  private static final int AUDIO_OBJECT_TYPE_AAC_LC = 2;
+  // Spectral Band Replication.
+  private static final int AUDIO_OBJECT_TYPE_SBR = 5;
+  // Error Resilient Bit-Sliced Arithmetic Coding.
+  private static final int AUDIO_OBJECT_TYPE_ER_BSAC = 22;
+  // Parametric Stereo.
+  private static final int AUDIO_OBJECT_TYPE_PS = 29;
 
   private CodecSpecificDataUtil() {}
 
@@ -64,13 +84,38 @@ public final class CodecSpecificDataUtil {
    * @return A pair consisting of the sample rate in Hz and the channel count.
    */
   public static Pair<Integer, Integer> parseAacAudioSpecificConfig(byte[] audioSpecificConfig) {
-    int audioObjectType = (audioSpecificConfig[0] >> 3) & 0x1F;
-    int byteOffset = audioObjectType == 5 || audioObjectType == 29 ? 1 : 0;
-    int frequencyIndex = (audioSpecificConfig[byteOffset] & 0x7) << 1
-        | ((audioSpecificConfig[byteOffset + 1] >> 7) & 0x1);
-    Assertions.checkState(frequencyIndex < 13);
-    int sampleRate = AUDIO_SPECIFIC_CONFIG_SAMPLING_RATE_TABLE[frequencyIndex];
-    int channelCount = (audioSpecificConfig[byteOffset + 1] >> 3) & 0xF;
+    ParsableBitArray bitArray = new ParsableBitArray(audioSpecificConfig);
+    int audioObjectType = bitArray.readBits(5);
+    int frequencyIndex = bitArray.readBits(4);
+    int sampleRate;
+    if (frequencyIndex == AUDIO_SPECIFIC_CONFIG_FREQUENCY_INDEX_ARBITRARY) {
+      sampleRate = bitArray.readBits(24);
+    } else {
+      Assertions.checkArgument(frequencyIndex < 13);
+      sampleRate = AUDIO_SPECIFIC_CONFIG_SAMPLING_RATE_TABLE[frequencyIndex];
+    }
+    int channelConfiguration = bitArray.readBits(4);
+    if (audioObjectType == AUDIO_OBJECT_TYPE_SBR || audioObjectType == AUDIO_OBJECT_TYPE_PS) {
+      // For an AAC bitstream using spectral band replication (SBR) or parametric stereo (PS) with
+      // explicit signaling, we return the extension sampling frequency as the sample rate of the
+      // content; this is identical to the sample rate of the decoded output but may differ from
+      // the sample rate set above.
+      // Use the extensionSamplingFrequencyIndex.
+      frequencyIndex = bitArray.readBits(4);
+      if (frequencyIndex == AUDIO_SPECIFIC_CONFIG_FREQUENCY_INDEX_ARBITRARY) {
+        sampleRate = bitArray.readBits(24);
+      } else {
+        Assertions.checkArgument(frequencyIndex < 13);
+        sampleRate = AUDIO_SPECIFIC_CONFIG_SAMPLING_RATE_TABLE[frequencyIndex];
+      }
+      audioObjectType = bitArray.readBits(5);
+      if (audioObjectType == AUDIO_OBJECT_TYPE_ER_BSAC) {
+        // Use the extensionChannelConfiguration.
+        channelConfiguration = bitArray.readBits(4);
+      }
+    }
+    int channelCount = AUDIO_SPECIFIC_CONFIG_CHANNEL_COUNT_TABLE[channelConfiguration];
+    Assertions.checkArgument(channelCount != AUDIO_SPECIFIC_CONFIG_CHANNEL_CONFIGURATION_INVALID);
     return Pair.create(sampleRate, channelCount);
   }
 
@@ -112,7 +157,7 @@ public final class CodecSpecificDataUtil {
     }
     // The full specification for AudioSpecificConfig is stated in ISO 14496-3 Section 1.6.2.1
     byte[] csd = new byte[2];
-    csd[0] = (byte) ((2 /* AAC LC */ << 3) | (sampleRateIndex >> 1));
+    csd[0] = (byte) ((AUDIO_OBJECT_TYPE_AAC_LC << 3) | (sampleRateIndex >> 1));
     csd[1] = (byte) (((sampleRateIndex & 0x1) << 7) | (channelConfig << 3));
     return csd;
   }
@@ -199,123 +244,6 @@ public final class CodecSpecificDataUtil {
       }
     }
     return true;
-  }
-
-  /**
-   * Parses an SPS NAL unit.
-   *
-   * @param bitArray A {@link ParsableBitArray} containing the SPS data. The position must to set
-   *     to the start of the data (i.e. the first bit of the profile_idc field).
-   * @return A parsed representation of the SPS data.
-   */
-  public static SpsData parseSpsNalUnit(ParsableBitArray bitArray) {
-    int profileIdc = bitArray.readBits(8);
-    bitArray.skipBits(16); // constraint bits (6), reserved (2) and level_idc (8)
-    bitArray.readUnsignedExpGolombCodedInt(); // seq_parameter_set_id
-
-    int chromaFormatIdc = 1; // Default is 4:2:0
-    if (profileIdc == 100 || profileIdc == 110 || profileIdc == 122 || profileIdc == 244
-        || profileIdc == 44 || profileIdc == 83 || profileIdc == 86 || profileIdc == 118
-        || profileIdc == 128 || profileIdc == 138) {
-      chromaFormatIdc = bitArray.readUnsignedExpGolombCodedInt();
-      if (chromaFormatIdc == 3) {
-        bitArray.skipBits(1); // separate_colour_plane_flag
-      }
-      bitArray.readUnsignedExpGolombCodedInt(); // bit_depth_luma_minus8
-      bitArray.readUnsignedExpGolombCodedInt(); // bit_depth_chroma_minus8
-      bitArray.skipBits(1); // qpprime_y_zero_transform_bypass_flag
-      boolean seqScalingMatrixPresentFlag = bitArray.readBit();
-      if (seqScalingMatrixPresentFlag) {
-        int limit = (chromaFormatIdc != 3) ? 8 : 12;
-        for (int i = 0; i < limit; i++) {
-          boolean seqScalingListPresentFlag = bitArray.readBit();
-          if (seqScalingListPresentFlag) {
-            skipScalingList(bitArray, i < 6 ? 16 : 64);
-          }
-        }
-      }
-    }
-
-    bitArray.readUnsignedExpGolombCodedInt(); // log2_max_frame_num_minus4
-    long picOrderCntType = bitArray.readUnsignedExpGolombCodedInt();
-    if (picOrderCntType == 0) {
-      bitArray.readUnsignedExpGolombCodedInt(); // log2_max_pic_order_cnt_lsb_minus4
-    } else if (picOrderCntType == 1) {
-      bitArray.skipBits(1); // delta_pic_order_always_zero_flag
-      bitArray.readSignedExpGolombCodedInt(); // offset_for_non_ref_pic
-      bitArray.readSignedExpGolombCodedInt(); // offset_for_top_to_bottom_field
-      long numRefFramesInPicOrderCntCycle = bitArray.readUnsignedExpGolombCodedInt();
-      for (int i = 0; i < numRefFramesInPicOrderCntCycle; i++) {
-        bitArray.readUnsignedExpGolombCodedInt(); // offset_for_ref_frame[i]
-      }
-    }
-    bitArray.readUnsignedExpGolombCodedInt(); // max_num_ref_frames
-    bitArray.skipBits(1); // gaps_in_frame_num_value_allowed_flag
-
-    int picWidthInMbs = bitArray.readUnsignedExpGolombCodedInt() + 1;
-    int picHeightInMapUnits = bitArray.readUnsignedExpGolombCodedInt() + 1;
-    boolean frameMbsOnlyFlag = bitArray.readBit();
-    int frameHeightInMbs = (2 - (frameMbsOnlyFlag ? 1 : 0)) * picHeightInMapUnits;
-    if (!frameMbsOnlyFlag) {
-      bitArray.skipBits(1); // mb_adaptive_frame_field_flag
-    }
-
-    bitArray.skipBits(1); // direct_8x8_inference_flag
-    int frameWidth = picWidthInMbs * 16;
-    int frameHeight = frameHeightInMbs * 16;
-    boolean frameCroppingFlag = bitArray.readBit();
-    if (frameCroppingFlag) {
-      int frameCropLeftOffset = bitArray.readUnsignedExpGolombCodedInt();
-      int frameCropRightOffset = bitArray.readUnsignedExpGolombCodedInt();
-      int frameCropTopOffset = bitArray.readUnsignedExpGolombCodedInt();
-      int frameCropBottomOffset = bitArray.readUnsignedExpGolombCodedInt();
-      int cropUnitX, cropUnitY;
-      if (chromaFormatIdc == 0) {
-        cropUnitX = 1;
-        cropUnitY = 2 - (frameMbsOnlyFlag ? 1 : 0);
-      } else {
-        int subWidthC = (chromaFormatIdc == 3) ? 1 : 2;
-        int subHeightC = (chromaFormatIdc == 1) ? 2 : 1;
-        cropUnitX = subWidthC;
-        cropUnitY = subHeightC * (2 - (frameMbsOnlyFlag ? 1 : 0));
-      }
-      frameWidth -= (frameCropLeftOffset + frameCropRightOffset) * cropUnitX;
-      frameHeight -= (frameCropTopOffset + frameCropBottomOffset) * cropUnitY;
-    }
-
-    float pixelWidthHeightRatio = 1;
-    boolean vuiParametersPresentFlag = bitArray.readBit();
-    if (vuiParametersPresentFlag) {
-      boolean aspectRatioInfoPresentFlag = bitArray.readBit();
-      if (aspectRatioInfoPresentFlag) {
-        int aspectRatioIdc = bitArray.readBits(8);
-        if (aspectRatioIdc == NalUnitUtil.EXTENDED_SAR) {
-          int sarWidth = bitArray.readBits(16);
-          int sarHeight = bitArray.readBits(16);
-          if (sarWidth != 0 && sarHeight != 0) {
-            pixelWidthHeightRatio = (float) sarWidth / sarHeight;
-          }
-        } else if (aspectRatioIdc < NalUnitUtil.ASPECT_RATIO_IDC_VALUES.length) {
-          pixelWidthHeightRatio = NalUnitUtil.ASPECT_RATIO_IDC_VALUES[aspectRatioIdc];
-        } else {
-          Log.w(TAG, "Unexpected aspect_ratio_idc value: " + aspectRatioIdc);
-        }
-      }
-    }
-
-    return new SpsData(frameWidth, frameHeight, pixelWidthHeightRatio);
-  }
-
-  private static void skipScalingList(ParsableBitArray bitArray, int size) {
-    int lastScale = 8;
-    int nextScale = 8;
-    for (int i = 0; i < size; i++) {
-      if (nextScale != 0) {
-        int deltaScale = bitArray.readSignedExpGolombCodedInt();
-        nextScale = (lastScale + deltaScale + 256) % 256;
-      }
-      lastScale = (nextScale == 0) ? lastScale : nextScale;
-    }
   }
 
 }

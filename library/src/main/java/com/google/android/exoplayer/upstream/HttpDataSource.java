@@ -15,11 +15,9 @@
  */
 package com.google.android.exoplayer.upstream;
 
+import android.text.TextUtils;
 import com.google.android.exoplayer.util.Predicate;
 import com.google.android.exoplayer.util.Util;
-
-import android.text.TextUtils;
-
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -32,7 +30,7 @@ public interface HttpDataSource extends UriDataSource {
   /**
    * A {@link Predicate} that rejects content types often used for pay-walls.
    */
-  public static final Predicate<String> REJECT_PAYWALL_TYPES = new Predicate<String>() {
+  Predicate<String> REJECT_PAYWALL_TYPES = new Predicate<String>() {
 
     @Override
     public boolean evaluate(String contentType) {
@@ -47,31 +45,41 @@ public interface HttpDataSource extends UriDataSource {
   /**
    * Thrown when an error is encountered when trying to read from a {@link HttpDataSource}.
    */
-  public static class HttpDataSourceException extends IOException {
+  class HttpDataSourceException extends IOException {
 
-    /*
+    public static final int TYPE_OPEN = 1;
+    public static final int TYPE_READ = 2;
+    public static final int TYPE_CLOSE = 3;
+
+    public final int type;
+
+    /**
      * The {@link DataSpec} associated with the current connection.
      */
     public final DataSpec dataSpec;
 
-    public HttpDataSourceException(DataSpec dataSpec) {
+    public HttpDataSourceException(DataSpec dataSpec, int type) {
       super();
       this.dataSpec = dataSpec;
+      this.type = type;
     }
 
-    public HttpDataSourceException(String message, DataSpec dataSpec) {
+    public HttpDataSourceException(String message, DataSpec dataSpec, int type) {
       super(message);
       this.dataSpec = dataSpec;
+      this.type = type;
     }
 
-    public HttpDataSourceException(IOException cause, DataSpec dataSpec) {
+    public HttpDataSourceException(IOException cause, DataSpec dataSpec, int type) {
       super(cause);
       this.dataSpec = dataSpec;
+      this.type = type;
     }
 
-    public HttpDataSourceException(String message, IOException cause, DataSpec dataSpec) {
+    public HttpDataSourceException(String message, IOException cause, DataSpec dataSpec, int type) {
       super(message, cause);
       this.dataSpec = dataSpec;
+      this.type = type;
     }
 
   }
@@ -79,12 +87,12 @@ public interface HttpDataSource extends UriDataSource {
   /**
    * Thrown when the content type is invalid.
    */
-  public static final class InvalidContentTypeException extends HttpDataSourceException {
+  final class InvalidContentTypeException extends HttpDataSourceException {
 
     public final String contentType;
 
     public InvalidContentTypeException(String contentType, DataSpec dataSpec) {
-      super("Invalid content type: " + contentType, dataSpec);
+      super("Invalid content type: " + contentType, dataSpec, TYPE_OPEN);
       this.contentType = contentType;
     }
 
@@ -93,7 +101,7 @@ public interface HttpDataSource extends UriDataSource {
   /**
    * Thrown when an attempt to open a connection results in a response code not in the 2xx range.
    */
-  public static final class InvalidResponseCodeException extends HttpDataSourceException {
+  final class InvalidResponseCodeException extends HttpDataSourceException {
 
     /**
      * The response code that was outside of the 2xx range.
@@ -107,7 +115,7 @@ public interface HttpDataSource extends UriDataSource {
 
     public InvalidResponseCodeException(int responseCode, Map<String, List<String>> headerFields,
         DataSpec dataSpec) {
-      super("Response code: " + responseCode, dataSpec);
+      super("Response code: " + responseCode, dataSpec, TYPE_OPEN);
       this.responseCode = responseCode;
       this.headerFields = headerFields;
     }

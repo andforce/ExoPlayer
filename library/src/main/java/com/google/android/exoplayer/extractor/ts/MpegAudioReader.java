@@ -66,10 +66,12 @@ import com.google.android.exoplayer.util.ParsableByteArray;
   }
 
   @Override
-  public void consume(ParsableByteArray data, long pesTimeUs, boolean startOfPacket) {
-    if (startOfPacket) {
-      timeUs = pesTimeUs;
-    }
+  public void packetStarted(long pesTimeUs, boolean dataAlignmentIndicator) {
+    timeUs = pesTimeUs;
+  }
+
+  @Override
+  public void consume(ParsableByteArray data) {
     while (data.bytesLeft() > 0) {
       switch (state) {
         case STATE_FINDING_HEADER:
@@ -160,7 +162,7 @@ import com.google.android.exoplayer.util.ParsableByteArray;
     frameSize = header.frameSize;
     if (!hasOutputFormat) {
       frameDurationUs = (C.MICROS_PER_SECOND * header.samplesPerFrame) / header.sampleRate;
-      MediaFormat mediaFormat = MediaFormat.createAudioFormat(MediaFormat.NO_VALUE, header.mimeType,
+      MediaFormat mediaFormat = MediaFormat.createAudioFormat(null, header.mimeType,
           MediaFormat.NO_VALUE, MpegAudioHeader.MAX_FRAME_SIZE_BYTES, C.UNKNOWN_TIME_US,
           header.channels, header.sampleRate, null, null);
       output.format(mediaFormat);

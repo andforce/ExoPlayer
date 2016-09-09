@@ -15,15 +15,14 @@
  */
 package com.google.android.exoplayer.playbacktests.util;
 
+import android.os.Handler;
+import android.os.SystemClock;
+import android.view.Surface;
 import com.google.android.exoplayer.ExoPlaybackException;
 import com.google.android.exoplayer.ExoPlayer;
 import com.google.android.exoplayer.TrackRenderer;
 import com.google.android.exoplayer.audio.AudioTrack;
 import com.google.android.exoplayer.playbacktests.util.HostActivity.HostedTest;
-
-import android.os.Handler;
-import android.os.SystemClock;
-import android.view.Surface;
 
 /**
  * A {@link HostedTest} for {@link ExoPlayer} playback tests.
@@ -85,7 +84,7 @@ public abstract class ExoHostedTest implements HostedTest, ExoPlayer.Listener {
   // HostedTest implementation
 
   @Override
-  public final void initialize(HostActivity host, Surface surface) {
+  public final void onStart(HostActivity host, Surface surface) {
     // Build the player.
     player = ExoPlayer.Factory.newInstance(rendererCount);
     player.addListener(this);
@@ -100,7 +99,7 @@ public abstract class ExoHostedTest implements HostedTest, ExoPlayer.Listener {
   }
 
   @Override
-  public final void release() {
+  public final void onStop() {
     actionHandler.removeCallbacksAndMessages(null);
     player.release();
     player = null;
@@ -112,11 +111,12 @@ public abstract class ExoHostedTest implements HostedTest, ExoPlayer.Listener {
   }
 
   @Override
-  public final void assertPassed() {
+  public final void onFinished() {
     if (failOnPlayerError && playerError != null) {
       throw new Error(playerError);
     }
-    assertPassedInternal();
+    logMetrics();
+    assertPassed();
   }
 
   // ExoPlayer.Listener
@@ -160,8 +160,12 @@ public abstract class ExoHostedTest implements HostedTest, ExoPlayer.Listener {
     // Do nothing. Interested subclasses may override.
   }
 
-  protected void assertPassedInternal() {
+  protected void assertPassed() {
     // Do nothing. Subclasses may override to add additional assertions.
+  }
+
+  protected void logMetrics() {
+    // Do nothing. Subclasses may override to log metrics.
   }
 
   // Utility methods and actions for subclasses.

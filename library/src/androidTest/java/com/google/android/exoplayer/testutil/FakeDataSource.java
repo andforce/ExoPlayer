@@ -19,7 +19,6 @@ import com.google.android.exoplayer.C;
 import com.google.android.exoplayer.upstream.DataSource;
 import com.google.android.exoplayer.upstream.DataSpec;
 import com.google.android.exoplayer.util.Assertions;
-
 import java.io.IOException;
 import java.util.ArrayList;
 
@@ -48,7 +47,7 @@ public final class FakeDataSource implements DataSource {
   private int currentSegmentIndex;
   private long bytesRemaining;
 
-  public FakeDataSource(boolean simulateUnknownLength, ArrayList<Segment> segments) {
+  private FakeDataSource(boolean simulateUnknownLength, ArrayList<Segment> segments) {
     this.simulateUnknownLength = simulateUnknownLength;
     this.segments = segments;
     long totalLength = 0;
@@ -163,7 +162,7 @@ public final class FakeDataSource implements DataSource {
   /**
    * Builder of {@link FakeDataSource} instances.
    */
-  public static class Builder {
+  public static final class Builder {
 
     private final ArrayList<Segment> segments;
     private boolean simulateUnknownLength;

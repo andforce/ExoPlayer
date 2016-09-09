@@ -15,15 +15,13 @@
  */
 package com.google.android.exoplayer.smoothstreaming;
 
+import android.net.Uri;
 import com.google.android.exoplayer.C;
 import com.google.android.exoplayer.chunk.Format;
 import com.google.android.exoplayer.chunk.FormatWrapper;
 import com.google.android.exoplayer.util.Assertions;
 import com.google.android.exoplayer.util.UriUtil;
 import com.google.android.exoplayer.util.Util;
-
-import android.net.Uri;
-
 import java.util.List;
 import java.util.UUID;
 
@@ -132,10 +130,10 @@ public class SmoothStreamingManifest {
     public final byte[][] csd;
 
     public TrackElement(int index, int bitrate, String mimeType, byte[][] csd, int maxWidth,
-        int maxHeight, int sampleRate, int numChannels) {
+        int maxHeight, int sampleRate, int numChannels, String language) {
       this.csd = csd;
       format = new Format(String.valueOf(index), mimeType, maxWidth, maxHeight, -1, numChannels,
-          sampleRate, bitrate);
+          sampleRate, bitrate, language);
     }
 
     @Override
